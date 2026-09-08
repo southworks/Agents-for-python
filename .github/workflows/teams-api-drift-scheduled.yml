@@ -17,7 +17,12 @@ jobs:
     timeout-minutes: 45
     env:
       DRIFT_MODE: scheduled
-      IS_FORK: ${{ github.event.pull_request.head.repo.fork || false }}
+      # BEGIN TEMPORARY WORKFLOW TEST — REMOVE BEFORE PRODUCTION
+      # Make the committed fake wheel discoverable by every pip subprocess.
+      PIP_FIND_LINKS: ${{ github.workspace }}/scripts/teams-api-drift/temporary-workflow-test
+      FAKE_TEAMS_API_BASELINE: "2.0.16"
+      FAKE_TEAMS_API_CANDIDATE: "2.99.901"
+      # END TEMPORARY WORKFLOW TEST
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -37,6 +42,12 @@ jobs:
           import json, os
           from pathlib import Path
           scope = json.loads(Path(os.environ["RUNNER_TEMP"], "teams-api-scope.json").read_text())
+          # BEGIN TEMPORARY WORKFLOW TEST — REMOVE BEFORE PRODUCTION
+          # Override the production minimum/latest pair with the real package
+          # copied by the fixture and its intentionally modified candidate.
+          scope["fromVersion"] = os.environ["FAKE_TEAMS_API_BASELINE"]
+          scope["toVersion"] = os.environ["FAKE_TEAMS_API_CANDIDATE"]
+          # END TEMPORARY WORKFLOW TEST
           with open(os.environ["GITHUB_ENV"], "a") as output:
               output.write("INPUT_FROM=" + scope["fromVersion"] + "\nINPUT_TO=" + scope["toVersion"] + "\n")
           PY
@@ -94,10 +105,9 @@ jobs:
           retention-days: 21
           if-no-files-found: warn
       - name: Publish maintainer report
-        if: ${{ always() && steps.analyze.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
+        if: ${{ always() && steps.analyze.outcome == 'success' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: python scripts/teams-api-drift/teams-api-drift.py publish --mode "$DRIFT_MODE"
       - name: Enforce final drift policy
         if: ${{ always() }}

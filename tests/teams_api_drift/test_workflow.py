@@ -158,7 +158,11 @@ def test_workflows_preserve_upload_before_publication_and_policy():
         assert upload < publication < policy
         assert steps[upload]["with"]["retention-days"] == "21"
         assert "always()" in steps[policy]["if"]
-        assert "fork == false" in steps[publication]["if"]
+        if path.name == "teams-api-drift-prs.yml":
+            assert "fork == false" in steps[publication]["if"]
+        else:
+            assert "pull_request" not in steps[publication]["if"]
+            assert "PR_NUMBER" not in steps[publication].get("env", {})
         for step in steps:
             if "uses" in step:
                 assert re.fullmatch(r"[\w/-]+@[0-9a-f]{40}", step["uses"])
