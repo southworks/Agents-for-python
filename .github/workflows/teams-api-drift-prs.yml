@@ -2,7 +2,7 @@ name: Teams API Drift Detector (PR)
 
 on:
   pull_request:
-    branches: [main, "release/*"]
+    branches: [main, "release/*", "southworks/add/teams-api-drift"]
     paths:
       - libraries/microsoft-agents-hosting-msteams/setup.py
   workflow_dispatch:
@@ -186,7 +186,7 @@ jobs:
         continue-on-error: true
       - id: prepare-agent-context
         name: Prepare bounded AI agent context
-        if: ${{ always() && steps.classify-usage-impact.outcome != 'skipped' && steps.render-deterministic-report.outcome == 'success' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.fork == false) }}
+        if: ${{ always() && steps.classify-usage-impact.outcome != 'skipped' && steps.render-deterministic-report.outcome == 'success' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.fork == true) }}
         run: |
           python scripts/teams-api-drift/teams-api-drift.py prepare \
             --findings "$ARTIFACTS/findings.json" \
@@ -243,7 +243,7 @@ jobs:
           if-no-files-found: warn
       # Upsert one marker-based summary comment only for trusted pull requests.
       - name: Publish pull-request comment
-        if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && steps.render-deterministic-report.outcome == 'success' }}
+        if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true && steps.render-deterministic-report.outcome == 'success' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           REPORT_PATH: artifacts/teams-api-drift/deterministic-report.md
@@ -284,7 +284,7 @@ jobs:
           INSTALL: ${{ steps.install-copilot-cli.outcome }}
           GENERATE: ${{ steps.generate-advisory-report.outcome }}
           VALIDATE: ${{ steps.validate-advisory-report.outcome }}
-          REQUIRE_ADVISORY: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.fork == false }}
+          REQUIRE_ADVISORY: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.fork == true }}
         shell: bash
         run: |
           failed=0
