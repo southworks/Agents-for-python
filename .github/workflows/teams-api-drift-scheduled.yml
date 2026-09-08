@@ -2,6 +2,7 @@ name: Scheduled Teams API Drift Detector
 
 on:
   schedule:
+    # Runs at 08:00 UTC every Monday (~1am PST)
     - cron: "0 8 * * 1"
   workflow_dispatch:
 
@@ -15,9 +16,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  analyze:
+  detect-and-report:
+    name: Detect and report teams.api drift
     runs-on: ubuntu-latest
-    timeout-minutes: 45
     env:
       ARTIFACTS: artifacts/teams-api-drift
       # BEGIN TEMPORARY WORKFLOW TEST — REMOVE BEFORE PRODUCTION
@@ -27,10 +28,12 @@ jobs:
       FAKE_TEAMS_API_CANDIDATE: "2.99.901"
       # END TEMPORARY WORKFLOW TEST
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
@@ -42,7 +45,7 @@ jobs:
           echo "CANDIDATE_WORK_ROOT=$RUNNER_TEMP/teams-api-comparison" >> "$GITHUB_ENV"
           echo "CANDIDATE_PYTHON=$RUNNER_TEMP/teams-api-comparison/candidate/bin/python" >> "$GITHUB_ENV"
 
-      - id: versions
+      - id: resolve-versions
         name: Resolve declared minimum and latest stable release
         run: |
           python scripts/teams-api-drift/teams-api-drift.py resolve \
@@ -66,23 +69,23 @@ jobs:
               output.write(f"from={resolved['fromVersion']}\n")
               output.write(f"to={resolved['toVersion']}\n")
           PY
-      - id: usage
-        name: Verify the curated usage contracts
+      - id: verify-usage-manifest
+        name: Verify dependency usage manifest
         run: python scripts/teams-api-drift/teams-api-drift.py verify-usage
         continue-on-error: true
-      - id: compare
-        name: Extract and compare exact Teams API versions
+      - id: compare-upstream-api-models
+        name: Compare baseline with latest stable teams.api
         env:
-          INPUT_FROM: ${{ steps.versions.outputs.from }}
-          INPUT_TO: ${{ steps.versions.outputs.to }}
+          INPUT_FROM: ${{ steps.resolve-versions.outputs.from }}
+          INPUT_TO: ${{ steps.resolve-versions.outputs.to }}
         run: |
           python scripts/teams-api-drift/teams-api-drift.py compare \
             --from "$INPUT_FROM" --to "$INPUT_TO" \
             --work-root "$CANDIDATE_WORK_ROOT" --output "$ARTIFACTS"
         continue-on-error: true
-      - id: changed
+      - id: comparison-result
         name: Read deterministic comparison result
-        if: ${{ steps.compare.outcome == 'success' }}
+        if: ${{ steps.compare-upstream-api-models.outcome == 'success' }}
         run: |
           python - <<'PY'
           import json
@@ -93,35 +96,35 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"value={str(comparison['changed']).lower()}\n")
           PY
-      - id: candidate
+      - id: build-candidate
         name: Build the extension around the exact candidate
-        if: ${{ steps.compare.outcome == 'success' }}
+        if: ${{ steps.compare-upstream-api-models.outcome == 'success' }}
         env:
-          INPUT_TO: ${{ steps.versions.outputs.to }}
+          INPUT_TO: ${{ steps.resolve-versions.outputs.to }}
         run: |
           python scripts/teams-api-drift/teams-api-drift.py prepare-candidate \
             --version "$INPUT_TO" --environment "$CANDIDATE_WORK_ROOT/candidate" \
             --output "$ARTIFACTS"
         continue-on-error: true
-      - id: contracts
-        name: Check consumed static contracts
-        if: ${{ steps.candidate.outcome == 'success' }}
+      - id: run-contracts-tests
+        name: Run contracts tests against candidate
+        if: ${{ steps.build-candidate.outcome == 'success' }}
         run: $CANDIDATE_PYTHON -m mypy --config-file scripts/teams-api-drift/mypy.ini tests/teams_api_drift/contracts.py
         continue-on-error: true
-      - id: boundaries
-        name: Check runtime boundaries against the candidate
-        if: ${{ steps.candidate.outcome == 'success' }}
+      - id: run-boundaries-tests
+        name: Run boundaries tests against the candidate
+        if: ${{ steps.build-candidate.outcome == 'success' }}
         run: $CANDIDATE_PYTHON -m pytest tests/hosting_msteams -o asyncio_default_fixture_loop_scope=function
         continue-on-error: true
-      - id: classify
-        name: Classify deterministic API findings
-        if: ${{ steps.compare.outcome == 'success' && steps.usage.outcome == 'success' }}
+      - id: classify-usage-impact
+        name: Classify direct compatibility impact
+        if: ${{ steps.compare-upstream-api-models.outcome == 'success' && steps.verify-usage-manifest.outcome == 'success' }}
         run: |
           python scripts/teams-api-drift/teams-api-drift.py detect \
             --comparison "$ARTIFACTS/raw-api-diff.json" \
             --output "$ARTIFACTS" --fail-on-drift
         continue-on-error: true
-      - id: summary
+      - id: write-verification-summary
         name: Write verification summary
         if: ${{ always() }}
         shell: bash
@@ -131,26 +134,26 @@ jobs:
             candidate=(--candidate-environment "$ARTIFACTS/candidate-environment.json")
           fi
           python scripts/teams-api-drift/teams-api-drift.py summary \
-            --build "${{ steps.candidate.outcome }}" \
-            --usage-collection "${{ steps.usage.outcome }}" \
-            --api-extraction "${{ steps.compare.outcome }}" \
-            --api-comparison "${{ steps.compare.outcome }}" \
-            --contract-tests "${{ steps.contracts.outcome }}" \
-            --boundary-tests "${{ steps.boundaries.outcome }}" \
+            --build "${{ steps.build-candidate.outcome }}" \
+            --usage-collection "${{ steps.verify-usage-manifest.outcome }}" \
+            --api-extraction "${{ steps.compare-upstream-api-models.outcome }}" \
+            --api-comparison "${{ steps.compare-upstream-api-models.outcome }}" \
+            --contract-tests "${{ steps.run-contracts-tests.outcome }}" \
+            --boundary-tests "${{ steps.run-boundaries-tests.outcome }}" \
             "${candidate[@]}" --output "$ARTIFACTS"
         continue-on-error: true
-      - id: render
+      - id: render-deterministic-report
         name: Render deterministic report
-        if: ${{ always() && steps.summary.outcome == 'success' }}
+        if: ${{ always() && steps.write-verification-summary.outcome == 'success' }}
         run: |
           python scripts/teams-api-drift/teams-api-drift.py render \
             --findings "$ARTIFACTS/findings.json" \
             --test-summary "$ARTIFACTS/test-summary.json" \
             --allow-incomplete --output "$ARTIFACTS"
         continue-on-error: true
-      - id: context
-        name: Prepare bounded advisory context for changed APIs
-        if: ${{ always() && steps.changed.outputs.value == 'true' && steps.render.outcome == 'success' }}
+      - id: prepare-agent-context
+        name: Prepare bounded AI agent context
+        if: ${{ always() && steps.comparison-result.outputs.value == 'true' && steps.render-deterministic-report.outcome == 'success' }}
         run: |
           python scripts/teams-api-drift/teams-api-drift.py prepare \
             --findings "$ARTIFACTS/findings.json" \
@@ -159,18 +162,18 @@ jobs:
             --output "$ARTIFACTS"
         continue-on-error: true
       - name: Set up Node for Copilot CLI
-        if: ${{ steps.context.outcome == 'success' }}
+        if: ${{ steps.prepare-agent-context.outcome == 'success' }}
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: "24"
-      - id: install
+      - id: install-copilot-cli
         name: Install GitHub Copilot CLI
-        if: ${{ steps.context.outcome == 'success' }}
+        if: ${{ steps.prepare-agent-context.outcome == 'success' }}
         run: npm install --global @github/copilot
         continue-on-error: true
-      - id: generate
-        name: Generate advisory report
-        if: ${{ steps.install.outcome == 'success' }}
+      - id: generate-advisory-report
+        name: Generate advisory AI report
+        if: ${{ steps.install-copilot-cli.outcome == 'success' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -190,13 +193,14 @@ jobs:
                   )
           PY
         continue-on-error: true
-      - id: validate
-        name: Validate advisory report against deterministic findings
-        if: ${{ steps.generate.outcome == 'success' }}
+      - id: validate-advisory-report
+        name: Validate advisory AI report
+        if: ${{ steps.generate-advisory-report.outcome == 'success' }}
         run: python scripts/teams-api-drift/teams-api-drift.py validate --output "$ARTIFACTS"
         continue-on-error: true
 
-      - name: Upload all available evidence before enforcing policy
+      # Upload evidence before the policy gate or issue update can fail the run.
+      - name: Upload scheduled drift artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
@@ -204,13 +208,13 @@ jobs:
           path: artifacts/teams-api-drift
           retention-days: 21
           if-no-files-found: warn
-      - name: Upsert scheduled advisory issue
-        if: ${{ always() && steps.changed.outputs.value == 'true' && steps.validate.outcome == 'success' }}
+      - name: Create or update drift issue
+        if: ${{ always() && steps.comparison-result.outputs.value == 'true' && steps.validate-advisory-report.outcome == 'success' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           REPORT_PATH: artifacts/teams-api-drift/agent-report.md
-          BASELINE: ${{ steps.versions.outputs.from }}
-          CANDIDATE: ${{ steps.versions.outputs.to }}
+          BASELINE: ${{ steps.resolve-versions.outputs.from }}
+          CANDIDATE: ${{ steps.resolve-versions.outputs.to }}
         with:
           script: |
             const fs = require('fs');
@@ -233,22 +237,23 @@ jobs:
                 owner: context.repo.owner, repo: context.repo.repo, title, body,
               });
             }
+      # Make compatibility failures visible after artifacts and any valid advisory issue are published.
       - name: Enforce final drift policy
         if: ${{ always() }}
         env:
-          USAGE: ${{ steps.usage.outcome }}
-          COMPARE: ${{ steps.compare.outcome }}
-          CANDIDATE_ENVIRONMENT: ${{ steps.candidate.outcome }}
-          CONTRACTS: ${{ steps.contracts.outcome }}
-          BOUNDARIES: ${{ steps.boundaries.outcome }}
-          CLASSIFY: ${{ steps.classify.outcome }}
-          SUMMARY: ${{ steps.summary.outcome }}
-          RENDER: ${{ steps.render.outcome }}
-          API_CHANGED: ${{ steps.changed.outputs.value }}
-          CONTEXT: ${{ steps.context.outcome }}
-          INSTALL: ${{ steps.install.outcome }}
-          GENERATE: ${{ steps.generate.outcome }}
-          VALIDATE: ${{ steps.validate.outcome }}
+          USAGE: ${{ steps.verify-usage-manifest.outcome }}
+          COMPARE: ${{ steps.compare-upstream-api-models.outcome }}
+          CANDIDATE_ENVIRONMENT: ${{ steps.build-candidate.outcome }}
+          CONTRACTS: ${{ steps.run-contracts-tests.outcome }}
+          BOUNDARIES: ${{ steps.run-boundaries-tests.outcome }}
+          CLASSIFY: ${{ steps.classify-usage-impact.outcome }}
+          SUMMARY: ${{ steps.write-verification-summary.outcome }}
+          RENDER: ${{ steps.render-deterministic-report.outcome }}
+          API_CHANGED: ${{ steps.comparison-result.outputs.value }}
+          CONTEXT: ${{ steps.prepare-agent-context.outcome }}
+          INSTALL: ${{ steps.install-copilot-cli.outcome }}
+          GENERATE: ${{ steps.generate-advisory-report.outcome }}
+          VALIDATE: ${{ steps.validate-advisory-report.outcome }}
         shell: bash
         run: |
           failed=0
