@@ -2,7 +2,7 @@ name: Teams API Drift Detector (PR)
 
 on:
   pull_request:
-    branches: [main, "release/*"]
+    branches: [main, "release/*", "southworks/add/teams-api-drift"]
     paths:
       - libraries/microsoft-agents-hosting-msteams/setup.py
   workflow_dispatch:
@@ -51,6 +51,11 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           INPUT_FROM: ${{ inputs.from }}
           INPUT_TO: ${{ inputs.to }}
+          # BEGIN TEMPORARY WORKFLOW TEST — REMOVE BEFORE PRODUCTION
+          # Match the scheduled fake-package comparison for pull-request runs.
+          FAKE_TEAMS_API_BASELINE: "2.0.16"
+          FAKE_TEAMS_API_CANDIDATE: "2.99.901"
+          # END TEMPORARY WORKFLOW TEST
         shell: bash
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
@@ -74,6 +79,12 @@ jobs:
           resolved = json.loads(
               Path(os.environ["RUNNER_TEMP"], "resolved", "resolved-versions.json").read_text()
           )
+          # BEGIN TEMPORARY WORKFLOW TEST — REMOVE BEFORE PRODUCTION
+          # The base branch declares 2.0.0. Use the known-good 2.0.16 release
+          # and the committed fake wheel to exercise the intended findings.
+          resolved["fromVersion"] = os.environ["FAKE_TEAMS_API_BASELINE"]
+          resolved["toVersion"] = os.environ["FAKE_TEAMS_API_CANDIDATE"]
+          # END TEMPORARY WORKFLOW TEST
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"run={str(resolved['changed']).lower()}\n")
               output.write(f"from={resolved['fromVersion']}\n")
@@ -88,6 +99,10 @@ jobs:
       INPUT_FROM: ${{ needs.analysis-scope.outputs.from }}
       INPUT_TO: ${{ needs.analysis-scope.outputs.to }}
       ARTIFACTS: artifacts/teams-api-drift
+      # BEGIN TEMPORARY WORKFLOW TEST — REMOVE BEFORE PRODUCTION
+      # Make the committed fake wheel discoverable by pip without disabling PyPI.
+      PIP_FIND_LINKS: ${{ github.workspace }}/scripts/teams-api-drift/temporary-workflow-test
+      # END TEMPORARY WORKFLOW TEST
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -186,7 +201,7 @@ jobs:
         continue-on-error: true
       - id: prepare-agent-context
         name: Prepare bounded AI agent context
-        if: ${{ always() && steps.classify-usage-impact.outcome != 'skipped' && steps.render-deterministic-report.outcome == 'success' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.fork == false) }}
+        if: ${{ always() && steps.classify-usage-impact.outcome != 'skipped' && steps.render-deterministic-report.outcome == 'success' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) }}
         run: |
           python scripts/teams-api-drift/teams-api-drift.py prepare \
             --findings "$ARTIFACTS/findings.json" \
@@ -220,9 +235,11 @@ jobs:
           with tempfile.TemporaryDirectory(prefix="teams-api-advisory-") as working_directory:
               with Path("artifacts/teams-api-drift/agent-report.md").open("w") as output:
                   subprocess.run(
-                      ["copilot", "-s", "-p", prompt + "\n## Runtime context\n\n" + context,
+                      ["copilot", "-s",
                        "--deny-tool=shell,write,read,url,memory,github", "--no-ask-user"],
-                      stdout=output, check=True, timeout=600, cwd=working_directory,
+                      input=prompt + "\n## Runtime context\n\n" + context,
+                      text=True, stdout=output, check=True, timeout=600,
+                      cwd=working_directory,
                   )
           PY
         continue-on-error: true
@@ -243,16 +260,31 @@ jobs:
           if-no-files-found: warn
       # Upsert one marker-based summary comment only for trusted pull requests.
       - name: Publish pull-request comment
-        if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && steps.render-deterministic-report.outcome == 'success' }}
+        if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.render-deterministic-report.outcome == 'success' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          REPORT_PATH: artifacts/teams-api-drift/deterministic-report.md
+          FINDINGS_PATH: artifacts/teams-api-drift/findings.json
         with:
           script: |
             const fs = require('fs');
             const marker = '<!-- teams-api-drift-report -->';
-            const report = fs.readFileSync(process.env.REPORT_PATH, 'utf8');
-            const body = `${marker}\n${report}\n[Workflow artifacts](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`;
+            const findings = JSON.parse(fs.readFileSync(process.env.FINDINGS_PATH, 'utf8'));
+            const actionable = findings.findings.filter(finding => finding.classification !== 'no-action');
+            const preview = actionable.slice(0, 5).map(finding =>
+              `- **${finding.id}** — ${finding.classification} · ${finding.kind}: \`${finding.upstreamSymbol}${finding.member ? '.' + finding.member : ''}\``
+            );
+            const artifactUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}#artifacts`;
+            const body = [
+              marker,
+              '## Teams API drift analysis',
+              '',
+              `Compared \`${findings.fromVersion}\` to \`${findings.toVersion}\`.`,
+              Object.entries(findings.summary).map(([name, count]) => `${name}: **${count}**`).join(' · '),
+              '',
+              ...(preview.length ? preview : ['- No actionable findings.']),
+              '',
+              `[Download the complete deterministic report and evidence](${artifactUrl})`,
+            ].join('\n');
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner, repo: context.repo.repo,
               issue_number: context.issue.number, per_page: 100,
@@ -276,6 +308,7 @@ jobs:
           USAGE: ${{ steps.verify-usage-manifest.outcome }}
           COMPARE: ${{ steps.compare-upstream-api-models.outcome }}
           CANDIDATE: ${{ steps.build-candidate.outcome }}
+          CONTRACTS: ${{ steps.run-contracts-tests.outcome }}
           BOUNDARIES: ${{ steps.run-boundaries-tests.outcome }}
           CLASSIFY: ${{ steps.classify-usage-impact.outcome }}
           SUMMARY: ${{ steps.write-verification-summary.outcome }}
@@ -284,7 +317,7 @@ jobs:
           INSTALL: ${{ steps.install-copilot-cli.outcome }}
           GENERATE: ${{ steps.generate-advisory-report.outcome }}
           VALIDATE: ${{ steps.validate-advisory-report.outcome }}
-          REQUIRE_ADVISORY: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.fork == false }}
+          REQUIRE_ADVISORY: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
         shell: bash
         run: |
           failed=0

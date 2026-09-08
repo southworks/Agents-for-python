@@ -134,7 +134,7 @@ def test_workflows_orchestrate_focused_commands_and_deferred_failure():
         final_gate = next(
             index
             for index, step in enumerate(steps)
-            if step.get("name") == "Enforce final drift policy"
+            if "for check in" in step.get("run", "")
         )
         assert upload < publication < final_gate
         assert steps[upload]["with"]["retention-days"] == "21"
@@ -152,12 +152,18 @@ def test_event_and_publication_policy_live_only_in_the_workflows():
     pull_requests = (workflows / "teams-api-drift-prs.yml").read_text()
     scheduled = (workflows / "teams-api-drift-scheduled.yml").read_text()
 
-    assert "github.event.pull_request.head.repo.fork == false" in pull_requests
+    assert (
+        "github.event.pull_request.head.repo.full_name == github.repository"
+        in pull_requests
+    )
     assert "github.event_name == 'workflow_dispatch'" in pull_requests
     assert "<!-- teams-api-drift-report -->" in pull_requests
     assert "github.paginate(github.rest.issues.listComments" in pull_requests
     assert "github.rest.issues.updateComment" in pull_requests
     assert "github.rest.issues.createComment" in pull_requests
+    assert 'input=prompt + "\\n## Runtime context\\n\\n" + context' in pull_requests
+    assert "actionable.slice(0, 5)" in pull_requests
+    assert "FINDINGS_PATH:" in pull_requests
     assert "pull_request" not in scheduled
     assert "fork" not in scheduled.lower()
     assert "<!-- scheduled-teams-api-drift -->" in scheduled
@@ -172,5 +178,14 @@ def test_scheduled_fake_candidate_override_is_visibly_bounded():
     source = path.read_text()
     assert source.count("BEGIN TEMPORARY WORKFLOW TEST") == 2
     assert source.count("END TEMPORARY WORKFLOW TEST") == 2
+    assert 'FAKE_TEAMS_API_CANDIDATE: "2.99.901"' in source
+    assert "PIP_FIND_LINKS:" in source
+
+
+def test_pr_fake_candidate_override_matches_scheduled_test_pair():
+    source = (ROOT / ".github/workflows/teams-api-drift-prs.yml").read_text()
+    assert source.count("BEGIN TEMPORARY WORKFLOW TEST") == 3
+    assert source.count("END TEMPORARY WORKFLOW TEST") == 3
+    assert 'FAKE_TEAMS_API_BASELINE: "2.0.16"' in source
     assert 'FAKE_TEAMS_API_CANDIDATE: "2.99.901"' in source
     assert "PIP_FIND_LINKS:" in source
