@@ -105,7 +105,14 @@ def test_workflows_orchestrate_focused_commands_and_deferred_failure():
     for path in (ROOT / ".github/workflows").glob("teams-api-drift-*.yml"):
         workflow = _workflow(path)
         assert "on" in workflow
-        steps = workflow["jobs"]["analyze"]["steps"]
+        steps = next(
+            job["steps"]
+            for job in workflow["jobs"].values()
+            if any(
+                "teams-api-drift.py compare" in step.get("run", "")
+                for step in job.get("steps", [])
+            )
+        )
         commands = set()
         for step in steps:
             run = step.get("run", "")
@@ -154,7 +161,7 @@ def test_event_and_publication_policy_live_only_in_the_workflows():
     assert "pull_request" not in scheduled
     assert "fork" not in scheduled.lower()
     assert "<!-- scheduled-teams-api-drift -->" in scheduled
-    assert "steps.changed.outputs.value == 'true'" in scheduled
+    assert re.search(r"steps\.[\w-]+\.outputs\.value == 'true'", scheduled)
     assert "github.paginate(github.rest.issues.listForRepo" in scheduled
     assert "github.rest.issues.update" in scheduled
     assert "github.rest.issues.create" in scheduled

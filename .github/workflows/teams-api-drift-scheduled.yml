@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   detect-and-report:
-    name: Detect and report teams.api drift
+    name: Detect and report microsoft-teams-api drift
     runs-on: ubuntu-latest
     env:
       ARTIFACTS: artifacts/teams-api-drift
@@ -38,7 +38,7 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: scripts/teams-api-drift/requirements.txt
-      - name: Install analysis tooling
+      - name: Install drift tooling
         run: python -m pip install -r scripts/teams-api-drift/requirements.txt
       - name: Configure disposable candidate paths
         run: |
@@ -74,7 +74,7 @@ jobs:
         run: python scripts/teams-api-drift/teams-api-drift.py verify-usage
         continue-on-error: true
       - id: compare-upstream-api-models
-        name: Compare baseline with latest stable teams.api
+        name: Compare baseline with latest stable microsoft-teams-api
         env:
           INPUT_FROM: ${{ steps.resolve-versions.outputs.from }}
           INPUT_TO: ${{ steps.resolve-versions.outputs.to }}
