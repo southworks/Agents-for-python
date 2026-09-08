@@ -1,22 +1,25 @@
 name: Scheduled Teams API Drift Detector
+
 on:
   schedule:
     - cron: "0 8 * * 1"
   workflow_dispatch:
+
 permissions:
   contents: read
   issues: write
   copilot-requests: write
+
 concurrency:
   group: scheduled-teams-api-drift
   cancel-in-progress: false
+
 jobs:
   analyze:
-
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      DRIFT_MODE: scheduled
+      ARTIFACTS: artifacts/teams-api-drift
       # BEGIN TEMPORARY WORKFLOW TEST — REMOVE BEFORE PRODUCTION
       # Make the committed fake wheel discoverable by every pip subprocess.
       PIP_FIND_LINKS: ${{ github.workspace }}/scripts/teams-api-drift/temporary-workflow-test
@@ -34,41 +37,135 @@ jobs:
           cache-dependency-path: scripts/teams-api-drift/requirements.txt
       - name: Install analysis tooling
         run: python -m pip install -r scripts/teams-api-drift/requirements.txt
-      - id: scope
+      - name: Configure disposable candidate paths
+        run: |
+          echo "CANDIDATE_WORK_ROOT=$RUNNER_TEMP/teams-api-comparison" >> "$GITHUB_ENV"
+          echo "CANDIDATE_PYTHON=$RUNNER_TEMP/teams-api-comparison/candidate/bin/python" >> "$GITHUB_ENV"
+
+      - id: versions
         name: Resolve declared minimum and latest stable release
         run: |
-          python scripts/teams-api-drift/teams-api-drift.py scope --mode scheduled >> "$RUNNER_TEMP/teams-api-scope.json"
+          python scripts/teams-api-drift/teams-api-drift.py resolve \
+            --setup libraries/microsoft-agents-hosting-msteams/setup.py \
+            --latest-stable --output "$RUNNER_TEMP/resolved"
           python - <<'PY'
-          import json, os
+          import json
+          import os
           from pathlib import Path
-          scope = json.loads(Path(os.environ["RUNNER_TEMP"], "teams-api-scope.json").read_text())
+
+          resolved = json.loads(
+              Path(os.environ["RUNNER_TEMP"], "resolved", "resolved-versions.json").read_text()
+          )
           # BEGIN TEMPORARY WORKFLOW TEST — REMOVE BEFORE PRODUCTION
           # Override the production minimum/latest pair with the real package
           # copied by the fixture and its intentionally modified candidate.
-          scope["fromVersion"] = os.environ["FAKE_TEAMS_API_BASELINE"]
-          scope["toVersion"] = os.environ["FAKE_TEAMS_API_CANDIDATE"]
+          resolved["fromVersion"] = os.environ["FAKE_TEAMS_API_BASELINE"]
+          resolved["toVersion"] = os.environ["FAKE_TEAMS_API_CANDIDATE"]
           # END TEMPORARY WORKFLOW TEST
-          with open(os.environ["GITHUB_ENV"], "a") as output:
-              output.write("INPUT_FROM=" + scope["fromVersion"] + "\nINPUT_TO=" + scope["toVersion"] + "\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"from={resolved['fromVersion']}\n")
+              output.write(f"to={resolved['toVersion']}\n")
           PY
-      - id: analyze
-        name: Collect deterministic comparison and candidate verification
-        if: ${{ success() }}
-        run: python scripts/teams-api-drift/teams-api-drift.py analyze --mode "$DRIFT_MODE"
+      - id: usage
+        name: Verify the curated usage contracts
+        run: python scripts/teams-api-drift/teams-api-drift.py verify-usage
+        continue-on-error: true
+      - id: compare
+        name: Extract and compare exact Teams API versions
+        env:
+          INPUT_FROM: ${{ steps.versions.outputs.from }}
+          INPUT_TO: ${{ steps.versions.outputs.to }}
+        run: |
+          python scripts/teams-api-drift/teams-api-drift.py compare \
+            --from "$INPUT_FROM" --to "$INPUT_TO" \
+            --work-root "$CANDIDATE_WORK_ROOT" --output "$ARTIFACTS"
+        continue-on-error: true
+      - id: changed
+        name: Read deterministic comparison result
+        if: ${{ steps.compare.outcome == 'success' }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          comparison = json.loads(Path(os.environ["ARTIFACTS"], "raw-api-diff.json").read_text())
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"value={str(comparison['changed']).lower()}\n")
+          PY
+      - id: candidate
+        name: Build the extension around the exact candidate
+        if: ${{ steps.compare.outcome == 'success' }}
+        env:
+          INPUT_TO: ${{ steps.versions.outputs.to }}
+        run: |
+          python scripts/teams-api-drift/teams-api-drift.py prepare-candidate \
+            --version "$INPUT_TO" --environment "$CANDIDATE_WORK_ROOT/candidate" \
+            --output "$ARTIFACTS"
+        continue-on-error: true
+      - id: contracts
+        name: Check consumed static contracts
+        if: ${{ steps.candidate.outcome == 'success' }}
+        run: $CANDIDATE_PYTHON -m mypy --config-file scripts/teams-api-drift/mypy.ini tests/teams_api_drift/contracts.py
+        continue-on-error: true
+      - id: boundaries
+        name: Check runtime boundaries against the candidate
+        if: ${{ steps.candidate.outcome == 'success' }}
+        run: $CANDIDATE_PYTHON -m pytest tests/hosting_msteams -o asyncio_default_fixture_loop_scope=function
+        continue-on-error: true
+      - id: classify
+        name: Classify deterministic API findings
+        if: ${{ steps.compare.outcome == 'success' && steps.usage.outcome == 'success' }}
+        run: |
+          python scripts/teams-api-drift/teams-api-drift.py detect \
+            --comparison "$ARTIFACTS/raw-api-diff.json" \
+            --output "$ARTIFACTS" --fail-on-drift
+        continue-on-error: true
+      - id: summary
+        name: Write verification summary
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          candidate=()
+          if [[ -f "$ARTIFACTS/candidate-environment.json" ]]; then
+            candidate=(--candidate-environment "$ARTIFACTS/candidate-environment.json")
+          fi
+          python scripts/teams-api-drift/teams-api-drift.py summary \
+            --build "${{ steps.candidate.outcome }}" \
+            --usage-collection "${{ steps.usage.outcome }}" \
+            --api-extraction "${{ steps.compare.outcome }}" \
+            --api-comparison "${{ steps.compare.outcome }}" \
+            --contract-tests "${{ steps.contracts.outcome }}" \
+            --boundary-tests "${{ steps.boundaries.outcome }}" \
+            "${candidate[@]}" --output "$ARTIFACTS"
+        continue-on-error: true
+      - id: render
+        name: Render deterministic report
+        if: ${{ always() && steps.summary.outcome == 'success' }}
+        run: |
+          python scripts/teams-api-drift/teams-api-drift.py render \
+            --findings "$ARTIFACTS/findings.json" \
+            --test-summary "$ARTIFACTS/test-summary.json" \
+            --allow-incomplete --output "$ARTIFACTS"
         continue-on-error: true
       - id: context
-        name: Prepare bounded advisory context
-        if: ${{ always() && steps.analyze.outcome == 'success' }}
-        run: python scripts/teams-api-drift/teams-api-drift.py context --mode "$DRIFT_MODE"
+        name: Prepare bounded advisory context for changed APIs
+        if: ${{ always() && steps.changed.outputs.value == 'true' && steps.render.outcome == 'success' }}
+        run: |
+          python scripts/teams-api-drift/teams-api-drift.py prepare \
+            --findings "$ARTIFACTS/findings.json" \
+            --test-summary "$ARTIFACTS/test-summary.json" \
+            --deterministic-report "$ARTIFACTS/deterministic-report.md" \
+            --output "$ARTIFACTS"
         continue-on-error: true
       - name: Set up Node for Copilot CLI
-        if: ${{ steps.context.outputs.ready == 'true' }}
+        if: ${{ steps.context.outcome == 'success' }}
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: "24"
       - id: install
         name: Install GitHub Copilot CLI
-        if: ${{ steps.context.outputs.ready == 'true' }}
+        if: ${{ steps.context.outcome == 'success' }}
         run: npm install --global @github/copilot
         continue-on-error: true
       - id: generate
@@ -81,21 +178,24 @@ jobs:
           from pathlib import Path
           import subprocess
           import tempfile
+
           prompt = Path("scripts/teams-api-drift/teams-api-agent-report-prompt.md").read_text()
           context = Path("artifacts/teams-api-drift/agent-context.json").read_text()
-          with tempfile.TemporaryDirectory(prefix="teams-api-advisory-") as working_directory, Path("artifacts/teams-api-drift/agent-report.md").open("w") as output:
-              subprocess.run(
-                  ["copilot", "-s", "-p", prompt + "\n## Runtime context\n\n" + context,
-                   "--deny-tool=shell,write,read,url,memory,github", "--no-ask-user"],
-                  stdout=output, check=True, timeout=600, cwd=working_directory,
-              )
+          with tempfile.TemporaryDirectory(prefix="teams-api-advisory-") as working_directory:
+              with Path("artifacts/teams-api-drift/agent-report.md").open("w") as output:
+                  subprocess.run(
+                      ["copilot", "-s", "-p", prompt + "\n## Runtime context\n\n" + context,
+                       "--deny-tool=shell,write,read,url,memory,github", "--no-ask-user"],
+                      stdout=output, check=True, timeout=600, cwd=working_directory,
+                  )
           PY
         continue-on-error: true
       - id: validate
         name: Validate advisory report against deterministic findings
         if: ${{ steps.generate.outcome == 'success' }}
-        run: python scripts/teams-api-drift/teams-api-drift.py validate
+        run: python scripts/teams-api-drift/teams-api-drift.py validate --output "$ARTIFACTS"
         continue-on-error: true
+
       - name: Upload all available evidence before enforcing policy
         if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -104,16 +204,66 @@ jobs:
           path: artifacts/teams-api-drift
           retention-days: 21
           if-no-files-found: warn
-      - name: Publish maintainer report
-        if: ${{ always() && steps.analyze.outcome == 'success' }}
+      - name: Upsert scheduled advisory issue
+        if: ${{ always() && steps.changed.outputs.value == 'true' && steps.validate.outcome == 'success' }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: python scripts/teams-api-drift/teams-api-drift.py publish --mode "$DRIFT_MODE"
+          REPORT_PATH: artifacts/teams-api-drift/agent-report.md
+          BASELINE: ${{ steps.versions.outputs.from }}
+          CANDIDATE: ${{ steps.versions.outputs.to }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- scheduled-teams-api-drift -->';
+            const report = fs.readFileSync(process.env.REPORT_PATH, 'utf8');
+            const body = `${marker}\n${report}\n[Workflow artifacts](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`;
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', per_page: 100,
+            });
+            const existing = issues.find(issue => issue.user?.type === 'Bot' && issue.body?.includes(marker));
+            const title = `Teams API drift advisory: ${process.env.BASELINE} to ${process.env.CANDIDATE}`;
+            if (existing) {
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.number, title, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo, title, body,
+              });
+            }
       - name: Enforce final drift policy
         if: ${{ always() }}
         env:
-          AI_CONTEXT_OUTCOME: ${{ steps.context.outcome }}
-          AI_INSTALL_OUTCOME: ${{ steps.install.outcome }}
-          AI_GENERATE_OUTCOME: ${{ steps.generate.outcome }}
-          AI_VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
-        run: python scripts/teams-api-drift/teams-api-drift.py policy --mode "$DRIFT_MODE"
+          USAGE: ${{ steps.usage.outcome }}
+          COMPARE: ${{ steps.compare.outcome }}
+          CANDIDATE_ENVIRONMENT: ${{ steps.candidate.outcome }}
+          CONTRACTS: ${{ steps.contracts.outcome }}
+          BOUNDARIES: ${{ steps.boundaries.outcome }}
+          CLASSIFY: ${{ steps.classify.outcome }}
+          SUMMARY: ${{ steps.summary.outcome }}
+          RENDER: ${{ steps.render.outcome }}
+          API_CHANGED: ${{ steps.changed.outputs.value }}
+          CONTEXT: ${{ steps.context.outcome }}
+          INSTALL: ${{ steps.install.outcome }}
+          GENERATE: ${{ steps.generate.outcome }}
+          VALIDATE: ${{ steps.validate.outcome }}
+        shell: bash
+        run: |
+          failed=0
+          for check in USAGE COMPARE CANDIDATE_ENVIRONMENT CONTRACTS BOUNDARIES CLASSIFY SUMMARY RENDER; do
+            if [[ "${!check}" != "success" ]]; then
+              echo "::error::$check ended with ${!check}"
+              failed=1
+            fi
+          done
+          if [[ "$API_CHANGED" == "true" ]]; then
+            for check in CONTEXT INSTALL GENERATE VALIDATE; do
+              if [[ "${!check}" != "success" ]]; then
+                echo "::error::$check ended with ${!check}"
+                failed=1
+              fi
+            done
+          fi
+          exit "$failed"

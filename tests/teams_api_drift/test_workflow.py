@@ -1,184 +1,169 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 
-from pathlib import Path
 import re
+import zipfile
 
-import pytest
 import yaml
 
-from teams_api_drift.cli import entrypoint
-from teams_api_drift.common import DEPENDENCY, ROOT
-from teams_api_drift.workflow import (
-    GitHub,
-    REQUIRED_CHECKS,
-    ai_required,
-    final_errors,
-    publish,
-)
-from teams_api_drift.report import ADVISORY, SECTIONS, TITLE
+from teams_api_drift.candidate import _extension_dependencies
+from teams_api_drift.cli import TOOL_COMMANDS, entrypoint
+from teams_api_drift.common import ROOT
 
 
-class FakeGitHub:
-    def __init__(self, existing=()):
-        self.existing = existing
-        self.calls = []
-
-    def paginate(self, path):
-        self.calls.append(("GET", path))
-        return self.existing
-
-    def request(self, method, path, body):
-        self.calls.append((method, path, body))
-        return body
-
-
-def findings():
-    return {
-        "schemaVersion": 1,
-        "dependency": DEPENDENCY,
-        "fromVersion": "2.0.0",
-        "toVersion": "2.0.16",
-        "summary": {"blocking": 0, "required": 0, "review": 0, "no-action": 0},
-        "findings": [],
-    }
-
-
-def advisory():
-    return (
-        TITLE
-        + "\n\n"
-        + "\n\n".join(
-            f"## {section}\n\n"
-            + (ADVISORY if section == "Summary" else "- No supported items.")
-            for section in SECTIONS
-        )
-        + "\n"
-    )
-
-
-def test_unified_cli_lists_and_dispatches_subcommands(tmp_path, capsys):
+def test_unified_cli_lists_and_dispatches_focused_subcommands(tmp_path, capsys):
     assert entrypoint(["--help"]) == 0
-    assert "compare" in capsys.readouterr().out
+    help_text = capsys.readouterr().out
+    assert "compare" in help_text
+    assert "prepare-candidate" in help_text
+    assert "analyze" not in help_text
+    assert "publish" not in help_text
+    assert "policy" not in help_text
     assert entrypoint(["summary", "--output", str(tmp_path), "--build", "success"]) == 0
     summary = yaml.safe_load((tmp_path / "test-summary.json").read_text())
     assert summary["checks"]["build"] == "success"
     assert entrypoint(["unknown"]) == 2
 
 
-@pytest.mark.parametrize(
-    "mode,event,fork,changed,expected",
-    [
-        ("pr", "pull_request", True, True, False),
-        ("pr", "pull_request", False, False, True),
-        ("pr", "workflow_dispatch", False, False, True),
-        ("scheduled", "schedule", False, False, False),
-        ("scheduled", "schedule", False, True, True),
-    ],
-)
-def test_advisory_policy(mode, event, fork, changed, expected):
-    assert ai_required(mode, event, fork, changed) is expected
+def test_extension_dependencies_exclude_teams_api(tmp_path):
+    wheel = tmp_path / "extension.whl"
+    metadata = """Metadata-Version: 2.1
+Name: example
+Version: 1.0
+Requires-Dist: microsoft-teams-api>=2,<3
+Requires-Dist: aiohttp>=3
+Requires-Dist: microsoft-agents-hosting-core==0.0.0
+
+"""
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("example-1.0.dist-info/METADATA", metadata)
+
+    assert _extension_dependencies(wheel) == [
+        "aiohttp>=3",
+        "microsoft-agents-hosting-core==0.0.0",
+    ]
 
 
-def test_final_gate_accounts_for_missing_and_skipped_checks():
-    state = {"checks": dict.fromkeys(REQUIRED_CHECKS, "success")}
-    assert final_errors(state, False, {}) == []
-    assert len(final_errors(state, True, {})) == 4
-    state["checks"]["contractTests"] = "skipped"
-    assert final_errors(state, False, {}) == ["contractTests: skipped"]
-
-
-def test_pr_comment_create_update_and_fork_guard():
-    github = FakeGitHub()
-    publish(github, "pr", findings(), "https://example.com/run", pr_number=12)
-    assert github.calls[-1][:2] == ("POST", "/issues/12/comments")
-    github = FakeGitHub(
-        [{"id": 9, "body": "<!-- teams-api-drift-report -->", "user": {"type": "Bot"}}]
+def test_renderer_can_preserve_evidence_after_an_upstream_failure(tmp_path):
+    assert (
+        entrypoint(
+            [
+                "render",
+                "--findings",
+                str(tmp_path / "missing-findings.json"),
+                "--allow-incomplete",
+                "--output",
+                str(tmp_path),
+            ]
+        )
+        == 0
     )
-    publish(github, "pr", findings(), "https://example.com/run", pr_number=12)
-    assert github.calls[-1][:2] == ("PATCH", "/issues/comments/9")
-    github = FakeGitHub()
-    publish(github, "pr", findings(), "", pr_number=12, fork=True)
-    assert github.calls == []
+    report = (tmp_path / "deterministic-report.md").read_text()
+    assert "Analysis is incomplete" in report
 
 
-def test_scheduled_issue_upsert_requires_valid_report():
-    github = FakeGitHub()
-    with pytest.raises(ValueError):
-        publish(github, "scheduled", findings(), "", report="unvalidated")
-    assert github.calls == []
-    publish(
-        github, "scheduled", findings(), "https://example.com/run", report=advisory()
+def test_python_commands_are_transformations_without_workflow_policy():
+    assert TOOL_COMMANDS == (
+        "resolve",
+        "verify-usage",
+        "compare",
+        "prepare-candidate",
+        "detect",
+        "summary",
+        "render",
+        "prepare",
+        "validate",
     )
-    assert github.calls[-1][:2] == ("POST", "/issues")
-    github = FakeGitHub(
-        [
-            {
-                "number": 8,
-                "body": "<!-- scheduled-teams-api-drift -->",
-                "user": {"type": "Bot"},
-            }
-        ]
-    )
-    publish(
-        github, "scheduled", findings(), "https://example.com/run", report=advisory()
-    )
-    assert github.calls[-1][:2] == ("PATCH", "/issues/8")
+    package = ROOT / "scripts/teams-api-drift/teams_api_drift"
+    assert not (package / "workflow.py").exists()
+    source = "\n".join(path.read_text() for path in package.glob("*.py"))
+    for workflow_concern in (
+        "GITHUB_EVENT_NAME",
+        "GITHUB_EVENT_PATH",
+        "GITHUB_TOKEN",
+        "pull_request",
+        "workflow_dispatch",
+    ):
+        assert workflow_concern not in source
 
 
-def test_github_paginates_until_short_page(monkeypatch):
-    github = GitHub("owner/repo", "fake-token")
-    paths = []
-
-    def request(method, path):
-        paths.append(path)
-        return [{}] * (100 if len(paths) == 1 else 1)
-
-    monkeypatch.setattr(github, "request", request)
-    assert len(github.paginate("/issues?state=open")) == 101
-    assert paths[-1].endswith("&per_page=100&page=2")
+def _workflow(path):
+    return yaml.load(path.read_text(), Loader=yaml.BaseLoader)
 
 
-def test_workflows_preserve_upload_before_publication_and_policy():
+def test_workflows_orchestrate_focused_commands_and_deferred_failure():
+    expected_commands = {
+        "verify-usage",
+        "compare",
+        "prepare-candidate",
+        "detect",
+        "summary",
+        "render",
+        "prepare",
+        "validate",
+    }
     for path in (ROOT / ".github/workflows").glob("teams-api-drift-*.yml"):
-        workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
+        workflow = _workflow(path)
         assert "on" in workflow
         steps = workflow["jobs"]["analyze"]["steps"]
+        commands = set()
+        for step in steps:
+            run = step.get("run", "")
+            commands.update(re.findall(r"teams-api-drift\.py\s+([a-z-]+)", run))
+            if "continue-on-error" in step:
+                assert step["continue-on-error"] == "true"
+        assert expected_commands <= commands
+
         upload = next(
-            i
-            for i, step in enumerate(steps)
+            index
+            for index, step in enumerate(steps)
             if "upload-artifact@" in step.get("uses", "")
         )
         publication = next(
-            i for i, step in enumerate(steps) if " publish " in step.get("run", "")
+            index
+            for index, step in enumerate(steps)
+            if "github-script@" in step.get("uses", "")
         )
-        policy = next(
-            i for i, step in enumerate(steps) if " policy " in step.get("run", "")
+        final_gate = next(
+            index
+            for index, step in enumerate(steps)
+            if step.get("name") == "Enforce final drift policy"
         )
-        assert upload < publication < policy
+        assert upload < publication < final_gate
         assert steps[upload]["with"]["retention-days"] == "21"
-        assert "always()" in steps[policy]["if"]
-        if path.name == "teams-api-drift-prs.yml":
-            assert "fork == false" in steps[publication]["if"]
-        else:
-            assert "pull_request" not in steps[publication]["if"]
-            assert "PR_NUMBER" not in steps[publication].get("env", {})
-        for step in steps:
-            if "uses" in step:
-                assert re.fullmatch(r"[\w/-]+@[0-9a-f]{40}", step["uses"])
+        assert "always()" in steps[final_gate]["if"]
+        assert "for check in" in steps[final_gate]["run"]
+
+        for job in workflow["jobs"].values():
+            for step in job.get("steps", []):
+                if "uses" in step:
+                    assert re.fullmatch(r"[\w/-]+@[0-9a-f]{40}", step["uses"])
 
 
-def test_analysis_retains_evidence_when_extraction_fails(tmp_path, monkeypatch):
-    from teams_api_drift.workflow import analysis
+def test_event_and_publication_policy_live_only_in_the_workflows():
+    workflows = ROOT / ".github/workflows"
+    pull_requests = (workflows / "teams-api-drift-prs.yml").read_text()
+    scheduled = (workflows / "teams-api-drift-scheduled.yml").read_text()
 
-    def fail(*args, **kwargs):
-        raise RuntimeError("synthetic extraction failure")
+    assert "github.event.pull_request.head.repo.fork == false" in pull_requests
+    assert "github.event_name == 'workflow_dispatch'" in pull_requests
+    assert "<!-- teams-api-drift-report -->" in pull_requests
+    assert "github.paginate(github.rest.issues.listComments" in pull_requests
+    assert "github.rest.issues.updateComment" in pull_requests
+    assert "github.rest.issues.createComment" in pull_requests
+    assert "pull_request" not in scheduled
+    assert "fork" not in scheduled.lower()
+    assert "<!-- scheduled-teams-api-drift -->" in scheduled
+    assert "steps.changed.outputs.value == 'true'" in scheduled
+    assert "github.paginate(github.rest.issues.listForRepo" in scheduled
+    assert "github.rest.issues.update" in scheduled
+    assert "github.rest.issues.create" in scheduled
 
-    monkeypatch.setattr("teams_api_drift.workflow.compare_versions", fail)
-    state = analysis("2.0.0", "2.0.16", tmp_path)
-    assert state["changed"] is None
-    assert state["checks"]["apiExtraction"] == "failure"
-    assert state["checks"]["contractTests"] == "skipped"
-    assert (tmp_path / "run-state.json").is_file()
-    assert "incomplete" in (tmp_path / "deterministic-report.md").read_text()
-    assert not (tmp_path / "findings.json").exists()
+
+def test_scheduled_fake_candidate_override_is_visibly_bounded():
+    path = ROOT / ".github/workflows/teams-api-drift-scheduled.yml"
+    source = path.read_text()
+    assert source.count("BEGIN TEMPORARY WORKFLOW TEST") == 2
+    assert source.count("END TEMPORARY WORKFLOW TEST") == 2
+    assert 'FAKE_TEAMS_API_CANDIDATE: "2.99.901"' in source
+    assert "PIP_FIND_LINKS:" in source

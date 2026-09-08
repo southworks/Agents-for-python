@@ -88,6 +88,22 @@ def test_missing_findings_and_unattributed_numbered_actions():
     assert any("not tied" in error for error in result["errors"])
 
 
+def test_cross_cutting_test_failure_belongs_in_validation_checklist():
+    advisory = (
+        "- **Advisory:** Investigate why boundary tests and contract tests failed "
+        "despite successful API extraction."
+    )
+    invalid = validate_agent_report(
+        report(**{"Maintainer decisions": advisory}), findings()
+    )
+    assert any(advisory in error for error in invalid["errors"])
+
+    valid = validate_agent_report(
+        report(**{"Validation checklist": advisory}), findings()
+    )
+    assert valid["valid"]
+
+
 def test_render_is_deterministic_and_links_only_existing_artifacts(tmp_path):
     (tmp_path / "findings.json").write_text("{}")
     first = render_report(findings(), {"checks": {"build": "failure"}}, tmp_path)

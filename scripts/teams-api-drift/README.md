@@ -16,32 +16,30 @@ the disposable extraction/test environments when needed.
 
 ```bash
 python -m pip install -r scripts/teams-api-drift/requirements.txt
-python scripts/teams-api-drift/teams-api-drift.py compare --from 2.0.0 --to 2.0.16 --output artifacts/teams-api-drift/example
+python scripts/teams-api-drift/teams-api-drift.py compare --from 2.0.0 --to 2.0.16 --work-root .teams-api-comparison --output artifacts/teams-api-drift/example
+python scripts/teams-api-drift/teams-api-drift.py prepare-candidate --version 2.0.16 --environment .teams-api-comparison/candidate --output artifacts/teams-api-drift/example
+./.teams-api-comparison/candidate/bin/python -m mypy --config-file scripts/teams-api-drift/mypy.ini tests/teams_api_drift/contracts.py
+./.teams-api-comparison/candidate/bin/python -m pytest tests/hosting_msteams -o asyncio_default_fixture_loop_scope=function
+python scripts/teams-api-drift/teams-api-drift.py verify-usage
 python scripts/teams-api-drift/teams-api-drift.py detect --comparison artifacts/teams-api-drift/example/raw-api-diff.json --output artifacts/teams-api-drift/example --fail-on-drift
-python scripts/teams-api-drift/teams-api-drift.py render --findings artifacts/teams-api-drift/example/findings.json --output artifacts/teams-api-drift/example
+python scripts/teams-api-drift/teams-api-drift.py summary --build success --usage-collection success --api-extraction success --api-comparison success --contract-tests success --boundary-tests success --candidate-environment artifacts/teams-api-drift/example/candidate-environment.json --output artifacts/teams-api-drift/example
+python scripts/teams-api-drift/teams-api-drift.py render --findings artifacts/teams-api-drift/example/findings.json --test-summary artifacts/teams-api-drift/example/test-summary.json --output artifacts/teams-api-drift/example
 ```
 
 Omit `--to` to query the latest stable, non-yanked PyPI release. Omit `--from` to
 use the version installed in the calling interpreter. Each comparison installs
-exact upstream versions in separate temporary virtual environments, which are
-removed after extraction. An unsupported interpreter or unresolved dependency
-is a failed extraction, never evidence of an unchanged API.
+exact upstream versions in separate virtual environments. `--work-root` keeps the
+candidate environment after extraction so the following build and compatibility
+commands test that exact version. An unsupported interpreter or unresolved
+dependency is a failed extraction, never evidence of an unchanged API. On
+Windows, use `.teams-api-comparison\candidate\Scripts\python.exe`.
 
-For the complete deterministic pipeline (including wheel builds and candidate
-contracts/runtime tests), use a **fresh output directory**:
-
-```bash
-python scripts/teams-api-drift/teams-api-drift.py analyze --from 2.0.0 --to 2.0.16 --output artifacts/teams-api-drift/full
-python scripts/teams-api-drift/teams-api-drift.py policy --mode scheduled --output artifacts/teams-api-drift/full
-```
-
-`analyze` deliberately collects failures without immediately failing. Inspect
-`run-state.json` and `test-summary.json`, or invoke `policy` to enforce the final
-result. Scheduled policy also requires successful advisory steps when the API
-changed; a local deterministic run alone does not satisfy that advisory gate.
-Individual comparison/detection/report commands do not call Copilot or publish
-anything. Run `teams-api-drift.py --help` to list subcommands and append
-`--help` after a subcommand for its options.
+Each command has one bounded role and reads its inputs from arguments. The GitHub
+Actions workflows compose these commands, record step outcomes, decide whether
+Copilot and publication are allowed, upload evidence, and enforce the final
+result. No Python command reads the GitHub event, publishes comments/issues, or
+implements workflow policy. Run `teams-api-drift.py --help` to list subcommands
+and append `--help` after a subcommand for its options.
 
 ## Evidence and classification
 
@@ -52,8 +50,9 @@ anything. Run `teams-api-drift.py --help` to list subcommands and append
   `TSAPI-*` IDs and a readable diff excluding extraction metadata.
 - `findings.json`: direct usage, affected source files, exposure, capability,
   evidence and classification for each upstream change.
-- `test-summary.json`, stage logs and `deterministic-report.md`: actual build and
-  candidate verification outcomes. Incomplete analysis is explicitly identified.
+- `test-summary.json` and `deterministic-report.md`: actual build and candidate
+  verification outcomes. Failed extraction still produces an explicitly incomplete
+  deterministic report from the evidence that is available.
 - `agent-context.json`, `agent-report.md`, `agent-report-validation.json`: bounded
   input, advisory output and mechanical validation results when AI runs.
 
@@ -127,6 +126,6 @@ python -m black --check scripts/teams-api-drift tests/teams_api_drift tests/host
 
 Static contracts and Teams tests require the local activity, hosting-core,
 authentication-msal and hosting-msteams packages plus the candidate installed.
-Offline tests mock GitHub publication and registry metadata. They never create
-live comments or issues. On Windows, use a short environment path or extended
-paths if the Graph dependency exceeds the system path-length limit.
+Offline tests validate publication orchestration and registry metadata without
+creating live comments or issues. On Windows, use a short environment path or
+extended paths if the Graph dependency exceeds the system path-length limit.

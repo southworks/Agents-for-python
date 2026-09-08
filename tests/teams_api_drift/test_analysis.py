@@ -17,7 +17,7 @@ from teams_api_drift.common import (
     read_json,
 )
 from teams_api_drift.compare import compare_models, extract_version
-from teams_api_drift.workflow import resolve_scope
+from teams_api_drift.resolve import resolve_versions
 
 
 def symbol(name="microsoft_teams.api.models.Parent", **overrides):
@@ -110,17 +110,24 @@ def test_latest_stable_uses_pep440_and_excludes_yanked_prereleases():
     assert latest_stable(metadata) == "3.0.0"
 
 
-def test_scope_skips_unrelated_setup_changes_and_normalizes_requirements():
+def test_resolver_detects_requirement_changes_and_normalizes_versions(tmp_path):
     before = "setup(install_requires=['microsoft-teams-api>=2.0.0,<3'])"
     after = "# comment\nsetup(install_requires=['microsoft_teams_api<3,>=2.0.0'])"
+    baseline = tmp_path / "baseline.py"
+    candidate = tmp_path / "candidate.py"
+    baseline.write_text(before)
+    candidate.write_text(after)
     # Canonical requirement names are compared independently of spelling.
-    assert not resolve_scope("pull_request", before, after)["run"]
-    changed = after.replace("2.0.0", "2.0.16")
-    assert resolve_scope("pull_request", before, changed) == {
-        "run": True,
-        "fromVersion": "2.0.0",
-        "toVersion": "2.0.16",
-    }
+    result = resolve_versions(baseline, candidate)
+    assert not result["changed"]
+    assert result["fromVersion"] == "2.0.0"
+    assert result["toVersion"] == "2.0.0"
+
+    candidate.write_text(after.replace("2.0.0", "2.0.16"))
+    result = resolve_versions(baseline, candidate)
+    assert result["changed"]
+    assert result["fromVersion"] == "2.0.0"
+    assert result["toVersion"] == "2.0.16"
 
 
 def test_identical_models_ignore_version_and_metadata():

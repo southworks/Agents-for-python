@@ -34,8 +34,15 @@ on its own line, followed by a blank line and then its content:
 - Use authoritativeArtifacts.findings as the source of truth for identifiers,
   classifications, evidence and affected files. Mention every blocking and
   required finding by its exact ID. Never invent finding IDs.
-- Tie every action bullet, including No action and Suggested implementation
-  issues, to a finding ID. For an empty section write a bullet starting `- No `.
+- In every section from Compatibility breaks through Suggested implementation
+  issues, each non-empty bullet must contain one or more exact finding IDs. Put
+  the IDs in the same bullet as the action. For an empty section write exactly
+  one bullet starting `- No `.
+- Discuss failed, skipped, or incomplete build and test checks only under
+  Validation checklist. Those checklist bullets describe cross-cutting
+  verification work and do not need finding IDs. Do not turn a check failure
+  into an unattributed action under Maintainer decisions or Suggested
+  implementation issues.
 - Use Feature-review candidates for feature-review findings and Internal
   implementation opportunities for internal-opportunity findings. Other review
   findings belong under Maintainer decisions.
