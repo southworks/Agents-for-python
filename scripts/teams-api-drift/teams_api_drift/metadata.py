@@ -108,6 +108,15 @@ class _UsageVisitor(ast.NodeVisitor):
         self.variables = {}
         self.members = []
         self.public_types = set()
+        self.public_class_depth = 0
+
+    def visit_ClassDef(self, node):
+        public = not node.name.startswith("_")
+        if public:
+            self.public_class_depth += 1
+        self.generic_visit(node)
+        if public:
+            self.public_class_depth -= 1
 
     def visit_FunctionDef(self, node):
         previous = self.variables.copy()
@@ -120,10 +129,10 @@ class _UsageVisitor(ast.NodeVisitor):
             symbol = _annotation_symbol(argument.annotation, self.aliases)
             if symbol:
                 self.variables[argument.arg] = symbol
-                if not node.name.startswith("_"):
+                if self.public_class_depth or not node.name.startswith("_"):
                     self.public_types.add(symbol)
         return_symbol = _annotation_symbol(node.returns, self.aliases)
-        if return_symbol and not node.name.startswith("_"):
+        if return_symbol and (self.public_class_depth or not node.name.startswith("_")):
             self.public_types.add(return_symbol)
         self.generic_visit(node)
         self.variables = previous

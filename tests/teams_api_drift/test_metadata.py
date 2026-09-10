@@ -126,6 +126,24 @@ def test_rejects_unrecorded_static_member_and_public_exposure(metadata_repo):
     assert "not marked publicly exposed" in str(error.value)
 
 
+def test_public_protocol_dunder_annotation_requires_public_exposure(metadata_repo):
+    activity = metadata_repo["source"] / "activity.py"
+    activity.write_text(
+        "from typing import Protocol\n"
+        "from microsoft_teams.api.models.channel_data import ChannelData\n"
+        "\n"
+        "class Handler(Protocol):\n"
+        "    def __call__(self, data: ChannelData) -> None: ...\n",
+        encoding="utf-8",
+    )
+    metadata_repo["manifest"]["usages"][0]["exposure"] = "internal-only"
+    metadata_repo["manifest"]["usages"][0]["propertiesRead"] = []
+    _write_json(metadata_repo["manifest_path"], metadata_repo["manifest"])
+
+    with pytest.raises(ValueError, match="not marked publicly exposed"):
+        _validate(metadata_repo)
+
+
 def test_rejects_unrecorded_static_method_call(metadata_repo):
     activity = metadata_repo["source"] / "activity.py"
     activity.write_text(
