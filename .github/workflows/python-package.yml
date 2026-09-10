@@ -10,7 +10,7 @@ on:
   push:
     branches: [ "main", "release/*" ]
   pull_request:
-    branches: [ "main", "release/*" ]
+    branches: [ "main", "release/*", "southworks/add/metadata-check" ]
 
 jobs:
   teams-api-metadata-changes:
