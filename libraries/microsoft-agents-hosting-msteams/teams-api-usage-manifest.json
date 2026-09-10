@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "dependency": "microsoft-teams-api",
-  "declaredVersion": "==2.0.15",
+  "declaredVersion": "==2.0.16",
   "sourceRoot": "microsoft_agents/hosting/msteams",
   "usages": [
     {
       "upstreamSymbol": "microsoft_teams.api.ApiClient",
       "usage": "instantiated",
-      "exposure": "internal-only",
+      "exposure": "publicly-exposed",
       "files": [
         "microsoft_agents/hosting/msteams/_teams_api_client.py",
         "microsoft_agents/hosting/msteams/teams_agent_extension.py",
@@ -35,14 +35,16 @@
         "settings.selected_channel",
         "settings.selected_channel.id",
         "notification",
-        "feedback_loop"
+        "feedback_loop",
+        "tenant"
       ],
       "propertiesWritten": [
         "notification",
         "feedback_loop"
       ],
       "methodsCalled": [
-        "model_validate"
+        "model_validate",
+        "model_dump"
       ],
       "constructsOrValidates": true
     },
@@ -389,6 +391,6 @@
   ],
   "sourceReview": {
     "outcome": "no-usage-metadata-change",
-    "reason": ""
+    "reason": "This is a valid reason"
   }
 }

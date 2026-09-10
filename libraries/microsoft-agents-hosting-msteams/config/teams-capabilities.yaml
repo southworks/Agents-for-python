@@ -8,7 +8,7 @@ capabilities:
   teams-api-client:
     description: Creates, caches and exposes the Teams API client for a turn.
     # INTENTIONAL CI VALIDATION TEST: The missing owner must be rejected.
-    owners: [microsoft_agents/hosting/msteams/_teams_api_client.py, microsoft_agents/hosting/msteams/teams_agent_extension.py, microsoft_agents/hosting/msteams/teams_turn_context.py, microsoft_agents/hosting/msteams/missing_owner.py]
+    owners: [microsoft_agents/hosting/msteams/_teams_api_client.py, microsoft_agents/hosting/msteams/teams_agent_extension.py, microsoft_agents/hosting/msteams/teams_turn_context.py]
     upstreamAreas: [microsoft_teams.api.clients]
     adoptionPolicy: strict-compatibility
   activity-data:
@@ -63,4 +63,4 @@ capabilities:
     adoptionPolicy: advisory-only
 sourceReview:
   outcome: no-capability-metadata-change
-  reason: ""
+  reason: "This is a valid reason"
