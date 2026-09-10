@@ -35,14 +35,16 @@
         "settings.selected_channel",
         "settings.selected_channel.id",
         "notification",
-        "feedback_loop"
+        "feedback_loop",
+        "tenant"
       ],
       "propertiesWritten": [
         "notification",
         "feedback_loop"
       ],
       "methodsCalled": [
-        "model_validate"
+        "model_validate",
+        "model_dump"
       ],
       "constructsOrValidates": true
     },
@@ -386,5 +388,9 @@
       "methodsCalled": [],
       "constructsOrValidates": false
     }
-  ]
+  ],
+  "sourceReview": {
+    "outcome": "no-usage-metadata-change",
+    "reason": "This is a valid reason"
+  }
 }

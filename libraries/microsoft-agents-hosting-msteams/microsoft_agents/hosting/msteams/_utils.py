@@ -146,3 +146,9 @@ async def _send_invoke_response(context: TurnContext, body: Any = None) -> None:
             value=InvokeResponse(status=int(HTTPStatus.OK), body=serialized_body),
         )
     )
+
+
+# INTENTIONAL CI VALIDATION TEST: These accesses are absent from the usage
+# manifest and should be reported as an unrecorded property read and method call.
+def _teams_api_metadata_validation_probe(data: ChannelData) -> tuple[Any, Any]:
+    return data.tenant, data.model_dump()
