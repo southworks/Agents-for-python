@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "dependency": "microsoft-teams-api",
-  "declaredVersion": "==2.0.16",
+  "declaredVersion": "==2.0.15",
   "sourceRoot": "microsoft_agents/hosting/msteams",
   "usages": [
     {
       "upstreamSymbol": "microsoft_teams.api.ApiClient",
       "usage": "instantiated",
-      "exposure": "publicly-exposed",
+      "exposure": "internal-only",
       "files": [
         "microsoft_agents/hosting/msteams/_teams_api_client.py",
         "microsoft_agents/hosting/msteams/teams_agent_extension.py",
@@ -386,5 +386,9 @@
       "methodsCalled": [],
       "constructsOrValidates": false
     }
-  ]
+  ],
+  "sourceReview": {
+    "outcome": "no-usage-metadata-change",
+    "reason": ""
+  }
 }

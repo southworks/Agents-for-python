@@ -7,7 +7,8 @@ dependency:
 capabilities:
   teams-api-client:
     description: Creates, caches and exposes the Teams API client for a turn.
-    owners: [microsoft_agents/hosting/msteams/_teams_api_client.py, microsoft_agents/hosting/msteams/teams_agent_extension.py, microsoft_agents/hosting/msteams/teams_turn_context.py]
+    # INTENTIONAL CI VALIDATION TEST: The missing owner must be rejected.
+    owners: [microsoft_agents/hosting/msteams/_teams_api_client.py, microsoft_agents/hosting/msteams/teams_agent_extension.py, microsoft_agents/hosting/msteams/teams_turn_context.py, microsoft_agents/hosting/msteams/missing_owner.py]
     upstreamAreas: [microsoft_teams.api.clients]
     adoptionPolicy: strict-compatibility
   activity-data:
@@ -60,3 +61,6 @@ capabilities:
     owners: [microsoft_agents/hosting/msteams/teams_agent_extension.py]
     upstreamAreas: [microsoft_teams.api.activities]
     adoptionPolicy: advisory-only
+sourceReview:
+  outcome: no-capability-metadata-change
+  reason: ""
