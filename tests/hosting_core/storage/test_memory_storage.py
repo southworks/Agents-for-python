@@ -5,11 +5,13 @@ import pytest
 from microsoft_agents.hosting.core.storage import (
     StorageDeleteOptions,
     StorageOperationStatus,
-    StorageVersion,
     StorageWriteMode,
     StorageWriteOptions,
 )
-from microsoft_agents.hosting.core.storage.memory_storage import MemoryStorage
+from microsoft_agents.hosting.core.storage.memory_storage import (
+    MemoryStorage,
+    MemoryStorageV2,
+)
 from tests._common.storage.utils import CRUDStorageTests
 from tests._common.storage.utils import MockStoreItem
 
@@ -39,7 +41,7 @@ class TestMemoryStorage(CRUDStorageTests):
 
 @pytest.mark.asyncio
 async def test_v2_returns_a_result_for_each_read_key():
-    storage = MemoryStorage(storage_version=StorageVersion.V2)
+    storage = MemoryStorageV2()
     await storage.write({"existing": MockStoreItem({"value": 1})})
 
     results = await storage.read(["existing", "missing"], target_cls=MockStoreItem)
@@ -52,7 +54,7 @@ async def test_v2_returns_a_result_for_each_read_key():
 
 @pytest.mark.asyncio
 async def test_v2_create_replace_and_conditional_delete():
-    storage = MemoryStorage(storage_version=StorageVersion.V2)
+    storage = MemoryStorageV2()
     created = await storage.write(
         {"key": MockStoreItem({"value": 1})},
         StorageWriteOptions(mode=StorageWriteMode.CREATE_ONLY),
@@ -89,7 +91,7 @@ async def test_v2_create_replace_and_conditional_delete():
 
 @pytest.mark.asyncio
 async def test_v2_does_not_mutate_or_share_store_item_data():
-    storage = MemoryStorage(storage_version=StorageVersion.V2)
+    storage = MemoryStorageV2()
     value = MockStoreItem({"nested": {"value": 1}})
     await storage.write({"key": value})
     value.data["nested"]["value"] = 2
@@ -103,7 +105,7 @@ async def test_v2_does_not_mutate_or_share_store_item_data():
 
 @pytest.mark.asyncio
 async def test_v2_accepts_existing_store_item_shape_models():
-    storage = MemoryStorage(storage_version=StorageVersion.V2)
+    storage = MemoryStorageV2()
 
     await storage.write({"key": _StoreItemShape({"value": 1})})
     result = await storage.read(["key"], target_cls=_StoreItemShape)
@@ -113,7 +115,7 @@ async def test_v2_accepts_existing_store_item_shape_models():
 
 @pytest.mark.asyncio
 async def test_v2_accepts_empty_batches_and_rejects_empty_version():
-    storage = MemoryStorage(storage_version=StorageVersion.V2)
+    storage = MemoryStorageV2()
 
     assert await storage.read([], target_cls=MockStoreItem) == {}
     assert await storage.write({}) == {}
@@ -126,13 +128,29 @@ async def test_v2_accepts_empty_batches_and_rejects_empty_version():
 
 
 @pytest.mark.asyncio
-async def test_v1_rejects_v2_options_instead_of_ignoring_them():
+async def test_v1_interface_does_not_accept_v2_options():
     storage = MemoryStorage()
 
-    with pytest.raises(ValueError, match="write options require Storage V2"):
+    with pytest.raises(TypeError, match="positional argument"):
         await storage.write({"key": MockStoreItem()}, StorageWriteOptions())
-    with pytest.raises(ValueError, match="delete options require Storage V2"):
+    with pytest.raises(TypeError, match="positional argument"):
         await storage.delete(["key"], StorageDeleteOptions())
+
+
+@pytest.mark.asyncio
+async def test_v2_conditional_operations_report_missing_as_condition_not_met():
+    storage = MemoryStorageV2()
+
+    written = await storage.write(
+        {"missing": MockStoreItem()},
+        StorageWriteOptions(mode=StorageWriteMode.REPLACE, expected_version="stale"),
+    )
+    deleted = await storage.delete(
+        ["missing"], StorageDeleteOptions(expected_version="stale")
+    )
+
+    assert written["missing"].status == StorageOperationStatus.CONDITION_NOT_MET
+    assert deleted["missing"].status == StorageOperationStatus.CONDITION_NOT_MET
 
 
 @pytest.mark.asyncio

@@ -179,7 +179,6 @@ pip install microsoft-agents-storage-blob
 | `connection_string` | `str` | No* | Storage account connection string |
 | `url` | `str` | No* | Blob service URL (e.g., `https://account.blob.core.windows.net`) |
 | `credential` | `TokenCredential` | No** | Azure credential for authentication |
-| `storage_version` | `StorageVersion` | No | Storage contract version; defaults to `StorageVersion.V1` |
 
 *Either `connection_string` OR (`url` + `credential`) must be provided  
 **Required when using `url`
@@ -222,9 +221,14 @@ config = BlobStorageConfig(
 
 ## Key Classes Reference
 
-- **`BlobStorage`** - Main storage implementation using Azure Blob Storage
+- **`BlobStorage`** - Legacy storage implementation using Azure Blob Storage
+- **`BlobStorageV2`** - Storage V2 implementation with per-key results and optimistic concurrency
 - **`BlobStorageConfig`** - Configuration settings for connection and authentication
 - **`StoreItem`** - Base class for data models (inherit to create custom types)
+
+`BlobStorage` and `BlobStorageV2` are separate public implementations. They
+share only private Azure client lifecycle and raw blob operations; each class
+owns its contract-specific read, write, and delete behavior.
 
 # Quick Links
 

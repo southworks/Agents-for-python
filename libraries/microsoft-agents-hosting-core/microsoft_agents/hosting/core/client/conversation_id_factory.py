@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 from uuid import uuid4
+from typing import Any
 from microsoft_agents.activity import AgentsModel
 from microsoft_agents.hosting.core.storage import StorageProvider, StoreItem
 from microsoft_agents.hosting.core.storage.storage_compatibility import (
@@ -15,15 +16,17 @@ from .agent_conversation_reference import AgentConversationReference
 from .conversation_id_factory_protocol import ConversationIdFactoryProtocol
 
 
-def _implement_store_item_for_agents_model_cls(model_instance: AgentsModel):
+def _implement_store_item_for_agents_model_cls(model_instance: AgentsModel) -> None:
     instance_cls = type(model_instance)
     if not isinstance(model_instance, StoreItem):
 
-        def store_item_to_json(instance):
+        def store_item_to_json(instance: AgentsModel) -> dict[str, Any]:
             return instance.model_dump(mode="json", exclude_none=True)
 
         @classmethod
-        def from_json_to_store_item(cls, data):
+        def from_json_to_store_item(
+            cls: type[AgentsModel], data: dict[str, Any]
+        ) -> AgentsModel:
             return cls.model_validate(data)
 
         setattr(

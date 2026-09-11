@@ -7,11 +7,13 @@ from microsoft_agents.hosting.core.storage import (
     StorageDeleteResult,
     StorageOperationStatus,
     StorageReadResult,
+    StorageReadResults,
+    StorageWriteResults,
+    StorageDeleteResults,
     StorageWriteMode,
     StorageWriteOptions,
 )
 from microsoft_agents.hosting.core.storage.storage_compatibility import (
-    as_storage,
     as_storage_v2,
     assert_storage_delete_succeeded,
     assert_storage_write_succeeded,
@@ -40,6 +42,11 @@ class _LegacyStorage(Storage):
 
 class _ModelItem(AgentsModel):
     value: str
+
+
+def test_write_options_reject_invalid_mode():
+    with pytest.raises(ValueError, match='mode "bogus"'):
+        StorageWriteOptions(mode="bogus")  # type: ignore[arg-type]
 
 
 def test_agents_model_store_item_serialization_uses_current_instance():
@@ -77,40 +84,31 @@ async def test_v1_adapter_rejects_unsupported_conditions():
         await storage.delete(["key"], StorageDeleteOptions(expected_version="1"))
 
 
-@pytest.mark.asyncio
-async def test_v2_adapter_exposes_legacy_storage_operations():
-    legacy = _LegacyStorage()
-    v2 = as_storage_v2(legacy)
-    storage = as_storage(v2)
-
-    await storage.write({"key": MockStoreItem({"value": 1})})
-
-    assert await storage.read(["key"], target_cls=MockStoreItem) == {
-        "key": MockStoreItem({"value": 1})
-    }
-
-
 def test_result_helpers_reject_missing_or_failed_results():
     assert (
         get_storage_read_value(
-            {
-                "key": StorageReadResult(
-                    key="key", status=StorageOperationStatus.NOT_FOUND
-                )
-            },
+            StorageReadResults(
+                {
+                    "key": StorageReadResult(
+                        key="key", status=StorageOperationStatus.NOT_FOUND
+                    )
+                }
+            ),
             "key",
         )
         is None
     )
     with pytest.raises(RuntimeError, match='status "missing"'):
-        assert_storage_write_succeeded({}, ["key"])
+        assert_storage_write_succeeded(StorageWriteResults(), ["key"])
     with pytest.raises(RuntimeError, match='status "conditionNotMet"'):
         assert_storage_delete_succeeded(
-            {
-                "key": StorageDeleteResult(
-                    key="key", status=StorageOperationStatus.CONDITION_NOT_MET
-                )
-            },
+            StorageDeleteResults(
+                {
+                    "key": StorageDeleteResult(
+                        key="key", status=StorageOperationStatus.CONDITION_NOT_MET
+                    )
+                }
+            ),
             ["key"],
         )
 
@@ -125,3 +123,27 @@ async def test_v2_accepts_agents_model_store_item_shape():
     result = await storage.read(["key"], target_cls=_ModelItem)
 
     assert get_storage_read_value(result, "key") == value
+
+
+def test_result_collections_expose_result_handling_behavior():
+    reads = StorageReadResults(
+        {
+            "missing": StorageReadResult(
+                key="missing", status=StorageOperationStatus.NOT_FOUND
+            )
+        }
+    )
+    writes = StorageWriteResults()
+    deletes = StorageDeleteResults(
+        {
+            "missing": StorageDeleteResult(
+                key="missing", status=StorageOperationStatus.NOT_FOUND
+            )
+        }
+    )
+
+    assert reads.get_value("missing") is None
+    assert not writes
+    deletes.assert_succeeded(["missing"], allow_not_found=True)
+    with pytest.raises(RuntimeError, match='status "missing"'):
+        writes.assert_succeeded(["missing"])

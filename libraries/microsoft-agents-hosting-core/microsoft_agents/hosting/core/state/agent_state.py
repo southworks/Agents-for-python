@@ -10,7 +10,6 @@ from typing import Callable, Type
 
 from microsoft_agents.hosting.core.storage import StorageProvider, StoreItem
 from microsoft_agents.hosting.core.storage.storage_compatibility import (
-    as_storage,
     as_storage_v2,
     assert_storage_delete_succeeded,
     assert_storage_write_succeeded,
@@ -97,15 +96,9 @@ class AgentState:
         :raises: It raises an argument null exception.
         """
         self.state_key = "state"
-        # Keep the legacy field for subclasses that access or replace it.
-        self._storage = as_storage(storage)
+        self._storage = as_storage_v2(storage)
         self._context_service_key = context_service_key
         self._cached_state: CachedAgentState | None = None
-
-    @property
-    def _storage_v2(self):
-        """Get the current storage field through the V2 compatibility seam."""
-        return as_storage_v2(self._storage)
 
     def get_cached_state(
         self, turn_context: TurnContext | None = None
@@ -167,9 +160,7 @@ class AgentState:
         storage_key = self.get_storage_key(turn_context)
 
         if self._should_load(turn_context, force):
-            items = await self._storage_v2.read(
-                [storage_key], target_cls=CachedAgentState
-            )
+            items = await self._storage.read([storage_key], target_cls=CachedAgentState)
             val = get_storage_read_value(items, storage_key) or CachedAgentState()
             self._cached_state = val
             turn_context.turn_state[self._context_service_key] = val
@@ -206,7 +197,7 @@ class AgentState:
         if force or (cached_state is not None and cached_state.is_changed):
             storage_key = self.get_storage_key(turn_context)
             changes: dict[str, StoreItem] = {storage_key: cached_state}
-            results = await self._storage_v2.write(changes)
+            results = await self._storage.write(changes)
             assert_storage_write_succeeded(results, list(changes))
             cached_state.hash = cached_state.compute_hash()
 
@@ -245,7 +236,7 @@ class AgentState:
         turn_context.turn_state.pop(self._context_service_key)
 
         storage_key = self.get_storage_key(turn_context)
-        results = await self._storage_v2.delete([storage_key])
+        results = await self._storage.delete([storage_key])
         assert_storage_delete_succeeded(results, [storage_key])
 
     @abstractmethod

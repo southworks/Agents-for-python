@@ -3,7 +3,7 @@
 
 from asyncio import Lock
 from copy import deepcopy
-from typing import Generic, Literal, TypeVar, cast, overload
+from typing import TypeVar, cast
 
 from ._type_aliases import JSON
 from .storage import (
@@ -15,212 +15,41 @@ from .storage import (
     StorageReadResult,
     StorageReadResults,
     StorageV2,
-    StorageVersion,
-    StorageVersionT,
     StorageWriteMode,
     StorageWriteOptions,
     StorageWriteResult,
     StorageWriteResults,
     is_store_item,
 )
-from .store_item import StoreItem
 from .storage_compatibility import (
     validate_expected_version,
     validate_storage_v2_changes,
     validate_storage_v2_keys,
-    validate_write_mode,
 )
+from .store_item import StoreItem
 from .telemetry import spans
 
 StoreItemT = TypeVar("StoreItemT", bound=StoreItem)
 
 
-class MemoryStorage(Storage, StorageV2, Generic[StorageVersionT]):
-    """In-memory storage implementation for testing and development purposes."""
+class _MemoryStore:
+    """Shared synchronized persistence mechanics for the two public adapters."""
 
-    def __init__(
-        self,
-        state: dict[str, JSON] | None = None,
-        *,
-        storage_version: StorageVersionT = StorageVersion.V1,
-    ):
-        """Initializes the MemoryStorage with an optional initial state.
-
-        :param state: An optional dictionary representing the initial state of the storage.
-        :raises ValueError: If state is not a dictionary or None.
-        """
-        if storage_version not in (StorageVersion.V1, StorageVersion.V2):
-            raise ValueError(f'Storage version "{storage_version}" is not supported.')
-        self.storage_version = StorageVersion(storage_version)
+    def __init__(self, state: dict[str, JSON] | None = None) -> None:
         self._memory: dict[str, JSON] = state or {}
         self._versions: dict[str, str] = {}
         self._next_version = 1
         self._lock = Lock()
 
-    @overload
     async def read(
-        self: "MemoryStorage[Literal[StorageVersion.V1]]",
-        keys: list[str],
-        *,
-        target_cls: type[StoreItemT],
-        **kwargs,
-    ) -> dict[str, StoreItemT]: ...
-
-    @overload
-    async def read(
-        self: "MemoryStorage[Literal[StorageVersion.V2]]",
-        keys: list[str],
-        *,
-        target_cls: type[StoreItemT],
-        **kwargs,
-    ) -> StorageReadResults[StoreItemT]: ...
-
-    @overload
-    async def read(
-        self: "MemoryStorage[StorageVersion]",
-        keys: list[str],
-        *,
-        target_cls: type[StoreItemT],
-        **kwargs,
-    ) -> dict[str, StoreItemT] | StorageReadResults[StoreItemT]: ...
-
-    async def read(
-        self, keys: list[str], *, target_cls: type[StoreItemT], **kwargs
-    ) -> dict[str, StoreItemT] | StorageReadResults[StoreItemT]:
-        """Reads items from the in-memory storage.
-
-        :param keys: A list of keys to read from the storage.
-        :param target_cls: The class type of the items to be read. Must be a subclass of StoreItem.
-        :return: A dictionary mapping keys to their corresponding StoreItem instances.
-        :raises ValueError: If keys are empty.
-        """
-
-        with spans.StorageRead(len(keys) if isinstance(keys, list) else 0):
-            if self.storage_version == StorageVersion.V2:
-                return await self._read_v2(keys, target_cls=target_cls)
-            return await self._read_v1(keys, target_cls=target_cls)
-
-    @overload
-    async def write(
-        self: "MemoryStorage[Literal[StorageVersion.V1]]",
-        changes: dict[str, StoreItem],
-        options: None = None,
-    ) -> None: ...
-
-    @overload
-    async def write(
-        self: "MemoryStorage[Literal[StorageVersion.V2]]",
-        changes: dict[str, StoreItem],
-        options: StorageWriteOptions | None = None,
-    ) -> StorageWriteResults: ...
-
-    @overload
-    async def write(
-        self: "MemoryStorage[StorageVersion]",
-        changes: dict[str, StoreItem],
-        options: StorageWriteOptions | None = None,
-    ) -> None | StorageWriteResults: ...
-
-    async def write(
-        self,
-        changes: dict[str, StoreItem],
-        options: StorageWriteOptions | None = None,
-    ) -> None | StorageWriteResults:
-        """Writes items to the in-memory storage.
-
-        :param changes: A dictionary mapping keys to StoreItem instances to be written to the storage.
-        :raises ValueError: If changes is None or any key is empty.
-        """
-        with spans.StorageWrite(len(changes) if isinstance(changes, dict) else 0):
-            if self.storage_version == StorageVersion.V2:
-                return await self._write_v2(changes, options)
-            if options is not None:
-                raise ValueError("Storage write options require Storage V2.")
-            return await self._write_v1(changes)
-
-    @overload
-    async def delete(
-        self: "MemoryStorage[Literal[StorageVersion.V1]]",
-        keys: list[str],
-        options: None = None,
-    ) -> None: ...
-
-    @overload
-    async def delete(
-        self: "MemoryStorage[Literal[StorageVersion.V2]]",
-        keys: list[str],
-        options: StorageDeleteOptions | None = None,
-    ) -> StorageDeleteResults: ...
-
-    @overload
-    async def delete(
-        self: "MemoryStorage[StorageVersion]",
-        keys: list[str],
-        options: StorageDeleteOptions | None = None,
-    ) -> None | StorageDeleteResults: ...
-
-    async def delete(
         self,
         keys: list[str],
-        options: StorageDeleteOptions | None = None,
-    ) -> None | StorageDeleteResults:
-        """Deletes items from the in-memory storage.
-
-        :param keys: A list of keys to delete from the storage.
-        :raises ValueError: If keys is empty or any key is empty.
-        """
-
-        with spans.StorageDelete(len(keys) if isinstance(keys, list) else 0):
-            if self.storage_version == StorageVersion.V2:
-                return await self._delete_v2(keys, options)
-            if options is not None:
-                raise ValueError("Storage delete options require Storage V2.")
-            return await self._delete_v1(keys)
-
-    async def _read_v1(
-        self, keys: list[str], *, target_cls: type[StoreItemT]
-    ) -> dict[str, StoreItemT]:
-        if not keys:
-            raise ValueError("Storage.read(): Keys are required when reading.")
-
-        result: dict[str, StoreItemT] = {}
-        async with self._lock:
-            for key in keys:
-                if key == "":
-                    raise ValueError("MemoryStorage.read(): key cannot be empty")
-                if key in self._memory:
-                    result[key] = cast(
-                        StoreItemT,
-                        target_cls.from_json_to_store_item(self._memory[key]),
-                    )
-        return result
-
-    async def _write_v1(self, changes: dict[str, StoreItem]) -> None:
-        if not changes:
-            raise ValueError("MemoryStorage.write(): changes cannot be empty")
-
-        async with self._lock:
-            for key in changes:
-                if key == "":
-                    raise ValueError("MemoryStorage.write(): key cannot be empty")
-                self._memory[key] = changes[key].store_item_to_json()
-
-    async def _delete_v1(self, keys: list[str]) -> None:
-        if not keys:
-            raise ValueError("Storage.delete(): Keys are required when deleting.")
-
-        async with self._lock:
-            for key in keys:
-                if key == "":
-                    raise ValueError("MemoryStorage.delete(): key cannot be empty")
-                self._memory.pop(key, None)
-
-    async def _read_v2(
-        self, keys: list[str], *, target_cls: type[StoreItemT]
+        *,
+        target_cls: type[StoreItemT],
+        copy_data: bool,
     ) -> StorageReadResults[StoreItemT]:
-        validate_storage_v2_keys(keys)
+        results: StorageReadResults[StoreItemT] = StorageReadResults()
         async with self._lock:
-            results: StorageReadResults[StoreItemT] = {}
             for key in keys:
                 if key not in self._memory:
                     results[key] = cast(
@@ -230,38 +59,31 @@ class MemoryStorage(Storage, StorageV2, Generic[StorageVersionT]):
                         ),
                     )
                     continue
+                data = self._memory[key]
+                if copy_data:
+                    data = deepcopy(data)
                 results[key] = cast(
                     StorageReadResult[StoreItemT],
                     StorageReadResult(
                         key=key,
                         status=StorageOperationStatus.SUCCEEDED,
                         value=cast(
-                            StoreItemT,
-                            target_cls.from_json_to_store_item(
-                                deepcopy(self._memory[key])
-                            ),
+                            StoreItemT, target_cls.from_json_to_store_item(data)
                         ),
                         version=self._versions.get(key),
                     ),
                 )
-            return results
+        return results
 
-    async def _write_v2(
+    async def write(
         self,
         changes: dict[str, StoreItem],
-        options: StorageWriteOptions | None,
+        options: StorageWriteOptions,
+        *,
+        copy_data: bool,
     ) -> StorageWriteResults:
-        validate_storage_v2_changes(changes)
-        if not changes:
-            return {}
-        options = options or StorageWriteOptions()
-        validate_write_mode(options.mode)
-        validate_expected_version(options.expected_version)
-        if any(not is_store_item(value) for value in changes.values()):
-            raise ValueError("Storage V2 values must implement store_item_to_json().")
-
+        results = StorageWriteResults()
         async with self._lock:
-            results: StorageWriteResults = {}
             for key, value in changes.items():
                 exists = key in self._memory
                 current_version = self._versions.get(key)
@@ -271,11 +93,8 @@ class MemoryStorage(Storage, StorageV2, Generic[StorageVersionT]):
                         status=StorageOperationStatus.CONFLICT,
                         version=current_version,
                     )
-                elif options.mode == StorageWriteMode.REPLACE and not exists:
-                    results[key] = StorageWriteResult(
-                        key=key, status=StorageOperationStatus.NOT_FOUND
-                    )
-                elif (
+                    continue
+                if (
                     options.expected_version is not None
                     and options.expected_version != current_version
                 ):
@@ -284,33 +103,37 @@ class MemoryStorage(Storage, StorageV2, Generic[StorageVersionT]):
                         status=StorageOperationStatus.CONDITION_NOT_MET,
                         version=current_version,
                     )
-                else:
-                    version = self._new_version()
-                    self._memory[key] = deepcopy(value.store_item_to_json())
-                    self._versions[key] = version
+                    continue
+                if options.mode == StorageWriteMode.REPLACE and not exists:
                     results[key] = StorageWriteResult(
-                        key=key,
-                        status=StorageOperationStatus.SUCCEEDED,
-                        version=version,
-                    )
-            return results
-
-    async def _delete_v2(
-        self,
-        keys: list[str],
-        options: StorageDeleteOptions | None,
-    ) -> StorageDeleteResults:
-        validate_storage_v2_keys(keys)
-        options = options or StorageDeleteOptions()
-        validate_expected_version(options.expected_version)
-
-        async with self._lock:
-            results: StorageDeleteResults = {}
-            for key in keys:
-                if key not in self._memory:
-                    results[key] = StorageDeleteResult(
                         key=key, status=StorageOperationStatus.NOT_FOUND
                     )
+                    continue
+
+                data = value.store_item_to_json()
+                self._memory[key] = deepcopy(data) if copy_data else data
+                version = self._new_version()
+                self._versions[key] = version
+                results[key] = StorageWriteResult(
+                    key=key,
+                    status=StorageOperationStatus.SUCCEEDED,
+                    version=version,
+                )
+        return results
+
+    async def delete(
+        self, keys: list[str], options: StorageDeleteOptions
+    ) -> StorageDeleteResults:
+        results = StorageDeleteResults()
+        async with self._lock:
+            for key in keys:
+                if key not in self._memory:
+                    status = (
+                        StorageOperationStatus.CONDITION_NOT_MET
+                        if options.expected_version is not None
+                        else StorageOperationStatus.NOT_FOUND
+                    )
+                    results[key] = StorageDeleteResult(key=key, status=status)
                     continue
                 current_version = self._versions.get(key)
                 if (
@@ -330,9 +153,89 @@ class MemoryStorage(Storage, StorageV2, Generic[StorageVersionT]):
                     status=StorageOperationStatus.SUCCEEDED,
                     version=current_version,
                 )
-            return results
+        return results
 
     def _new_version(self) -> str:
         version = str(self._next_version)
         self._next_version += 1
         return version
+
+
+class MemoryStorage(Storage):
+    """Legacy in-memory storage adapter for testing and development."""
+
+    def __init__(self, state: dict[str, JSON] | None = None) -> None:
+        self._store = _MemoryStore(state)
+
+    async def read(
+        self, keys: list[str], *, target_cls: type[StoreItemT], **kwargs: object
+    ) -> dict[str, StoreItemT]:
+        if not keys:
+            raise ValueError("Storage.read(): Keys are required when reading.")
+        if any(not key for key in keys):
+            raise ValueError("MemoryStorage.read(): key cannot be empty")
+        with spans.StorageRead(len(keys)):
+            results = await self._store.read(
+                keys, target_cls=target_cls, copy_data=False
+            )
+        return {
+            key: value for key in keys if (value := results.get_value(key)) is not None
+        }
+
+    async def write(self, changes: dict[str, StoreItem]) -> None:
+        if not changes:
+            raise ValueError("MemoryStorage.write(): changes cannot be empty")
+        if any(not key for key in changes):
+            raise ValueError("MemoryStorage.write(): key cannot be empty")
+        with spans.StorageWrite(len(changes)):
+            results = await self._store.write(
+                changes, StorageWriteOptions(), copy_data=False
+            )
+        results.assert_succeeded(changes)
+
+    async def delete(self, keys: list[str]) -> None:
+        if not keys:
+            raise ValueError("Storage.delete(): Keys are required when deleting.")
+        if any(not key for key in keys):
+            raise ValueError("MemoryStorage.delete(): key cannot be empty")
+        with spans.StorageDelete(len(keys)):
+            results = await self._store.delete(keys, StorageDeleteOptions())
+        results.assert_succeeded(keys, allow_not_found=True)
+
+
+class MemoryStorageV2(StorageV2):
+    """In-memory Storage V2 adapter with per-key results and versions."""
+
+    def __init__(self, state: dict[str, JSON] | None = None) -> None:
+        self._store = _MemoryStore(state)
+
+    async def read(
+        self, keys: list[str], *, target_cls: type[StoreItemT], **kwargs: object
+    ) -> StorageReadResults[StoreItemT]:
+        validate_storage_v2_keys(keys)
+        with spans.StorageRead(len(keys)):
+            return await self._store.read(keys, target_cls=target_cls, copy_data=True)
+
+    async def write(
+        self,
+        changes: dict[str, StoreItem],
+        options: StorageWriteOptions | None = None,
+    ) -> StorageWriteResults:
+        validate_storage_v2_changes(changes)
+        write_options = options or StorageWriteOptions()
+        validate_expected_version(write_options.expected_version)
+        if any(not is_store_item(value) for value in changes.values()):
+            raise ValueError("Storage V2 values must implement store_item_to_json().")
+        with spans.StorageWrite(len(changes)):
+            return await self._store.write(changes, write_options, copy_data=True)
+
+    async def delete(
+        self,
+        keys: list[str],
+        options: StorageDeleteOptions | None = None,
+    ) -> StorageDeleteResults:
+        validate_storage_v2_keys(keys)
+        delete_options = options or StorageDeleteOptions()
+        validate_expected_version(delete_options.expected_version)
+        with spans.StorageDelete(len(keys)):
+            return await self._store.delete(keys, delete_options)

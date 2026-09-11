@@ -114,13 +114,12 @@ from .storage import (
     StorageReadResult,
     StorageReadResults,
     StorageV2,
-    StorageVersion,
     StorageWriteMode,
     StorageWriteOptions,
     StorageWriteResult,
     StorageWriteResults,
 )
-from .storage.memory_storage import MemoryStorage
+from .storage.memory_storage import MemoryStorage, MemoryStorageV2
 
 # Error Resources
 from .errors import error_resources, ErrorMessage, ErrorResources
@@ -202,7 +201,6 @@ __all__ = [
     "Storage",
     "StorageV2",
     "StorageProvider",
-    "StorageVersion",
     "StorageOperationStatus",
     "StorageWriteMode",
     "StorageWriteOptions",
@@ -214,6 +212,7 @@ __all__ = [
     "StorageDeleteResult",
     "StorageDeleteResults",
     "MemoryStorage",
+    "MemoryStorageV2",
     "AgenticUserAuthorization",
     "Authorization",
     "MiddlewareSet",

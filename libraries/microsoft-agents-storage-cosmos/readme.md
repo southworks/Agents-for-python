@@ -174,9 +174,9 @@ pip install microsoft-agents-storage-cosmos
 
 ## Storage version
 
-`CosmosDBStorageConfig` uses V1 by default. Set
-`storage_version=StorageVersion.V2` for per-key operation results and
-optimistic concurrency tokens.
+Use `CosmosDBStorage` for the legacy storage contract or `CosmosDBStorageV2`
+for per-key operation results and optimistic concurrency tokens. Both classes
+accept the same `CosmosDBStorageConfig`.
 
 
 ## Environment Setup
@@ -203,9 +203,14 @@ Install and run the Azure Cosmos DB Emulator for local testing:
 
 ## Key Classes Reference
 
-- **`CosmosDBStorage`** - Main storage implementation using Azure Cosmos DB
+- **`CosmosDBStorage`** - Legacy storage implementation using Azure Cosmos DB
+- **`CosmosDBStorageV2`** - Storage V2 implementation with per-key results and optimistic concurrency
 - **`CosmosDBStorageConfig`** - Configuration settings for connection and behavior
 - **`StoreItem`** - Base class for data models (inherit to create custom types)
+
+`CosmosDBStorage` and `CosmosDBStorageV2` are separate public implementations.
+They share only private Azure client lifecycle and raw document operations;
+each class owns its contract-specific read, write, and delete behavior.
 
 # Quick Links
 

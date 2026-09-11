@@ -2,7 +2,6 @@ import json
 import pytest
 
 from microsoft_agents.storage.cosmos import CosmosDBStorageConfig
-from microsoft_agents.hosting.core.storage import StorageVersion
 
 # thank you AI, again
 
@@ -43,13 +42,6 @@ def config_with_options():
 
 
 class TestCosmosDBStorageConfig:
-
-    def test_storage_version_defaults_to_v1_and_can_select_v2(self):
-        assert CosmosDBStorageConfig().storage_version == StorageVersion.V1
-        assert (
-            CosmosDBStorageConfig(storage_version=StorageVersion.V2).storage_version
-            == StorageVersion.V2
-        )
 
     def test_constructor_with_parameters(self):
         """Test creating config with direct parameters"""

@@ -1,10 +1,7 @@
-from typing import Generic
-
 from azure.core.credentials_async import AsyncTokenCredential
-from microsoft_agents.hosting.core.storage import StorageVersion, StorageVersionT
 
 
-class BlobStorageConfig(Generic[StorageVersionT]):
+class BlobStorageConfig:
     """Configuration settings for BlobStorage."""
 
     def __init__(
@@ -13,7 +10,6 @@ class BlobStorageConfig(Generic[StorageVersionT]):
         connection_string: str = "",
         url: str = "",
         credential: AsyncTokenCredential | None = None,
-        storage_version: StorageVersionT = StorageVersion.V1,
     ):
         """Configuration settings for BlobStorage.
 
@@ -28,4 +24,3 @@ class BlobStorageConfig(Generic[StorageVersionT]):
         self.connection_string: str = connection_string
         self.url: str = url
         self.credential: AsyncTokenCredential | None = credential
-        self.storage_version = StorageVersion(storage_version)

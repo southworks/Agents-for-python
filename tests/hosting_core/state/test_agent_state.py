@@ -18,9 +18,13 @@ from microsoft_agents.hosting.core.app.state.conversation_state import Conversat
 from microsoft_agents.hosting.core.turn_context import TurnContext
 from microsoft_agents.hosting.core.storage import (
     Storage,
+    StorageV2,
+    StorageOperationStatus,
+    StorageWriteResult,
+    StorageWriteResults,
     StoreItem,
     MemoryStorage,
-    StorageVersion,
+    MemoryStorageV2,
 )
 from microsoft_agents.activity import (
     Activity,
@@ -179,7 +183,7 @@ class TestAgentState:
         await self.user_state.load(self.context)
 
         # Save without making changes - should not call storage
-        storage_mock = MagicMock(spec=Storage)
+        storage_mock = MagicMock(spec=StorageV2)
         storage_mock.write = AsyncMock()
         self.user_state._storage = storage_mock
 
@@ -213,8 +217,16 @@ class TestAgentState:
         await self.user_state.load(self.context)
 
         # Use a mock storage to verify write is called even without changes
-        storage_mock = MagicMock(spec=Storage)
-        storage_mock.write = AsyncMock()
+        storage_mock = MagicMock(spec=StorageV2)
+        storage_key = self.user_state.get_storage_key(self.context)
+        write_results = StorageWriteResults(
+            {
+                storage_key: StorageWriteResult(
+                    key=storage_key, status=StorageOperationStatus.SUCCEEDED
+                )
+            }
+        )
+        storage_mock.write = AsyncMock(return_value=write_results)
         self.user_state._storage = storage_mock
 
         await self.user_state.save(self.context, force=True)
@@ -484,7 +496,7 @@ class TestAgentState:
 
     @pytest.mark.asyncio
     async def test_memory_storage_v2_integration(self):
-        memory_storage = MemoryStorage(storage_version=StorageVersion.V2)
+        memory_storage = MemoryStorageV2()
         user_state = UserState(memory_storage)
 
         await user_state.load(self.context)

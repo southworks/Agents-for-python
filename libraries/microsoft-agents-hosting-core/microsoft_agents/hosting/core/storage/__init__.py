@@ -4,6 +4,7 @@
 from .store_item import StoreItem
 from .storage import (
     AsyncStorageBase,
+    AsyncStorageBaseV2,
     Storage,
     StorageDeleteOptions,
     StorageDeleteResult,
@@ -13,15 +14,13 @@ from .storage import (
     StorageReadResult,
     StorageReadResults,
     StorageV2,
-    StorageVersion,
-    StorageVersionT,
     StorageWriteMode,
     StorageWriteOptions,
     StorageWriteResult,
     StorageWriteResults,
     is_store_item,
 )
-from .memory_storage import MemoryStorage
+from .memory_storage import MemoryStorage, MemoryStorageV2
 
 from .transcript import (
     TranscriptInfo,
@@ -39,8 +38,6 @@ __all__ = [
     "Storage",
     "StorageV2",
     "StorageProvider",
-    "StorageVersion",
-    "StorageVersionT",
     "StorageOperationStatus",
     "StorageWriteMode",
     "StorageWriteOptions",
@@ -53,7 +50,9 @@ __all__ = [
     "StorageDeleteResults",
     "is_store_item",
     "AsyncStorageBase",
+    "AsyncStorageBaseV2",
     "MemoryStorage",
+    "MemoryStorageV2",
     "TranscriptInfo",
     "TranscriptLogger",
     "ConsoleTranscriptLogger",
